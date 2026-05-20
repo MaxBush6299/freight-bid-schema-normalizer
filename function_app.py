@@ -11,6 +11,7 @@ import azure.functions as func
 from azure.storage.blob import BlobServiceClient
 
 from src.function_app.services.pipeline_runner import run_pipeline
+from src.function_app.services.xls_converter import ensure_xlsx
 
 app = func.FunctionApp()
 logger = logging.getLogger(__name__)

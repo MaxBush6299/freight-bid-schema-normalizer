@@ -24,6 +24,7 @@ from .script_policy import evaluate_script_policy
 from .template_loader import load_canonical_schema
 from .validation_service import validate_canonical_records
 from .workbook_profiler import profile_workbook
+from .xls_converter import ensure_xlsx
 
 
 def _extract_records_from_sandbox_result(result: Any) -> list[dict[str, Any]]:
@@ -100,6 +101,12 @@ def run_pipeline(
     planner_mode: str | None = None,
 ) -> dict[str, Any]:
     input_workbook_path = str(Path(input_workbook).resolve())
+
+    # TD-001: pre-convert .xls to .xlsx so openpyxl can process it
+    _converted_path, _did_convert = ensure_xlsx(input_workbook_path)
+    if _did_convert:
+        input_workbook_path = str(_converted_path)
+
     schema = load_canonical_schema("src/function_app/templates/canonical_schema.freight_bid_v1.json")
     profile = profile_workbook(input_workbook_path)
     planning_constraints = _build_planning_constraints(schema, profile)
@@ -163,6 +170,12 @@ def run_pipeline(
     user_prompt_path = artifact_store.write_text("planner_user_prompt.txt", user_prompt)
     planner_response_path = artifact_store.write_text("planner_response.json", plan.model_dump_json(indent=2))
     profile_path = artifact_store.write_text("workbook_profile.json", profile.model_dump_json(indent=2))
+    # TD-003: emit lane provenance artifact when Coupa <<define>> rows were found
+    if profile.lane_provenance:
+        artifact_store.write_json(
+            "lane_provenance.json",
+            [entry.model_dump() for entry in profile.lane_provenance],
+        )
     note_field_detection_path = artifact_store.write_json("note_field_detection.json", planning_constraints)
     schema_cache_lookup_payload = {
         "schema_fingerprint_sha256": schema_fingerprint_hash,

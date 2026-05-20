@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -7,8 +8,21 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ..models.contracts import SheetProfile, WorkbookProfile
+from ..models.contracts import ColumnGroup, LaneProvenanceEntry, SheetProfile, WorkbookProfile
 from .sheet_classifier import classify_sheet
+
+
+# ── TD-002: Coupa control-token pattern ───────────────────────────────────────
+_COUPA_TOKEN_RE = re.compile(r"^<<[^>]+>>", re.IGNORECASE)
+
+# TD-003: <<define>> rows carry the Route Name in column D (index 3, 0-based)
+_COUPA_DEFINE_RE = re.compile(r"^<<\s*define\s*>>", re.IGNORECASE)
+
+# TD-005: hidden "Lot Name" sentinel that delimits repeating bid-slot groups
+_LOT_NAME_RE = re.compile(r"lot\s*name", re.IGNORECASE)
+
+# TD-007: validationInfo sheet name
+_VALIDATION_INFO_NAME_RE = re.compile(r"validationinfo", re.IGNORECASE)
 
 
 def _stringify(value: Any) -> str:
@@ -32,10 +46,22 @@ def _infer_type(values: list[Any]) -> str:
     return "str"
 
 
+def _is_coupa_token_row(row_values: list[Any]) -> bool:
+    """TD-002: Return True if the first non-empty cell is a Coupa control token."""
+    for value in row_values:
+        text = _stringify(value)
+        if text:
+            return bool(_COUPA_TOKEN_RE.match(text))
+    return False
+
+
 def _header_score(row_values: list[Any]) -> int:
     normalized = [_stringify(value) for value in row_values]
     non_empty = [value for value in normalized if value]
     if not non_empty:
+        return -1
+    # TD-002: never score a Coupa token row as a header
+    if _COUPA_TOKEN_RE.match(non_empty[0]):
         return -1
 
     unique_count = len(set(non_empty))
@@ -64,6 +90,17 @@ def _extract_columns(sheet: Worksheet, header_row: int) -> list[str]:
         if header_value:
             columns.append(header_value)
     return columns
+
+
+def _extract_control_rows(sheet: Worksheet, scan_limit: int = 30) -> list[dict[str, Any]]:
+    """TD-002: Collect all Coupa token rows before the real header."""
+    control_rows: list[dict[str, Any]] = []
+    max_scan = min(sheet.max_row or 1, scan_limit)
+    for row_index in range(1, max_scan + 1):
+        row_values = [sheet.cell(row=row_index, column=col_idx).value for col_idx in range(1, (sheet.max_column or 1) + 1)]
+        if _is_coupa_token_row(row_values):
+            control_rows.append({"row_index": row_index, "values": row_values})
+    return control_rows
 
 
 def _extract_sample_rows(sheet: Worksheet, header_row: int, columns: list[str], sample_size: int = 10) -> list[dict[str, Any]]:
@@ -109,12 +146,146 @@ def _calculate_empty_column_ratio(columns: list[str], sample_rows: list[dict[str
     return empty_columns / len(columns)
 
 
+def _extract_lane_provenance(sheet: Worksheet, sheet_name: str) -> list[LaneProvenanceEntry]:
+    """TD-003: Scan for <<define>> rows and return one entry per Route Name."""
+    entries: list[LaneProvenanceEntry] = []
+    max_row = sheet.max_row or 1
+    for row_index in range(1, max_row + 1):
+        first_cell = _stringify(sheet.cell(row=row_index, column=1).value)
+        if _COUPA_DEFINE_RE.match(first_cell):
+            # Route Name is in column D (index 4)
+            route_name = _stringify(sheet.cell(row=row_index, column=4).value)
+            if route_name:
+                entries.append(LaneProvenanceEntry(
+                    route_name=route_name,
+                    sheet_name=sheet_name,
+                    row_index=row_index,
+                ))
+    return entries
+
+
+def _detect_column_groups(sheet: Worksheet, header_row: int) -> list[ColumnGroup]:
+    """TD-005: Detect repeating bid-slot column groups separated by hidden Lot Name sentinels."""
+    if not header_row:
+        return []
+
+    max_col = sheet.max_column or 1
+    groups: list[ColumnGroup] = []
+    current_group_cols: list[str] = []
+    current_group_start: int | None = None
+    group_index = 0
+
+    for col_idx in range(1, max_col + 1):
+        header_val = _stringify(sheet.cell(row=header_row, column=col_idx).value)
+
+        if _LOT_NAME_RE.search(header_val):
+            try:
+                col_letter = sheet.cell(row=header_row, column=col_idx).column_letter
+                col_dim = sheet.column_dimensions.get(col_letter)
+                is_hidden = col_dim is not None and getattr(col_dim, "hidden", False)
+            except AttributeError:
+                # ReadOnlyWorksheet doesn't expose column_dimensions;
+                # fall back to treating any Lot Name header as a sentinel
+                is_hidden = True
+            # Sentinel column — start a new group
+            if current_group_cols and current_group_start is not None:
+                groups.append(ColumnGroup(
+                    group_index=group_index,
+                    lot_name=header_val,
+                    col_offset=current_group_start,
+                    columns=list(current_group_cols),
+                ))
+                group_index += 1
+            current_group_cols = []
+            current_group_start = None
+        else:
+            if header_val:
+                if current_group_start is None:
+                    current_group_start = col_idx
+                current_group_cols.append(header_val)
+
+    # Flush last group
+    if current_group_cols and current_group_start is not None:
+        groups.append(ColumnGroup(
+            group_index=group_index,
+            lot_name="",
+            col_offset=current_group_start,
+            columns=current_group_cols,
+        ))
+
+    # Only return groups if we found more than one (otherwise it's not a repeating structure)
+    return groups if len(groups) > 1 else []
+
+
+def _parse_validation_info(sheet: Worksheet) -> dict[str, list[str]]:
+    """TD-007: Parse the validationInfo sheet into a dropdown catalog dict."""
+    catalog: dict[str, list[str]] = {}
+    if sheet is None:
+        return catalog
+
+    max_col = sheet.max_column or 1
+    for col_idx in range(1, max_col + 1):
+        header = _stringify(sheet.cell(row=1, column=col_idx).value)
+        if not header:
+            continue
+        values: list[str] = []
+        for row_idx in range(2, (sheet.max_row or 1) + 1):
+            val = _stringify(sheet.cell(row=row_idx, column=col_idx).value)
+            if val:
+                values.append(val)
+        if values:
+            catalog[header] = values
+    return catalog
+
+
+def _detect_formula_columns(workbook_path: str, sheet_name: str) -> list[int]:
+    """TD-008: Re-open the workbook WITHOUT data_only to detect formula cells.
+
+    Returns a sorted list of 1-based column indices that contain at least one
+    formula in the first 50 data rows.
+    """
+    try:
+        wb = load_workbook(workbook_path, data_only=False, read_only=True)
+        sheet = wb[sheet_name] if sheet_name in wb.sheetnames else None
+        if sheet is None:
+            wb.close()
+            return []
+
+        formula_cols: set[int] = set()
+        max_row = min(sheet.max_row or 1, 60)
+        max_col = sheet.max_column or 1
+        for row_idx in range(1, max_row + 1):
+            for col_idx in range(1, max_col + 1):
+                val = sheet.cell(row=row_idx, column=col_idx).value
+                if isinstance(val, str) and val.startswith("="):
+                    formula_cols.add(col_idx)
+        wb.close()
+        return sorted(formula_cols)
+    except Exception:
+        return []
+
+
 def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfile:
     workbook = load_workbook(workbook_path, data_only=True, read_only=True)
     try:
         sheet_profiles: list[SheetProfile] = []
+        all_provenance: list[LaneProvenanceEntry] = []
+        dropdown_catalog: dict[str, list[str]] = {}
+
+        # TD-007: parse validationInfo first (hidden sheet — use a second open for it)
+        validation_info_wb = load_workbook(workbook_path, data_only=True, read_only=False)
+        try:
+            for ws_name in validation_info_wb.sheetnames:
+                if _VALIDATION_INFO_NAME_RE.match(ws_name):
+                    dropdown_catalog = _parse_validation_info(validation_info_wb[ws_name])
+                    break
+        finally:
+            validation_info_wb.close()
 
         for sheet in workbook.worksheets:
+            # TD-002: collect control rows before header detection
+            control_rows = _extract_control_rows(sheet)
+
             header_candidates = _detect_header_row_candidates(sheet)
             selected_header = header_candidates[0] if header_candidates else 1
 
@@ -129,6 +300,18 @@ def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfi
             classification = classify_sheet(sheet.title, columns, sample_rows)
             duplicate_headers = _find_duplicate_headers(columns)
             empty_ratio = _calculate_empty_column_ratio(columns, sample_rows)
+
+            # TD-003: extract provenance from Coupa bid sheets
+            provenance: list[LaneProvenanceEntry] = []
+            if classification.get("coupa_sheet_type") == "coupa_bid_data":
+                provenance = _extract_lane_provenance(sheet, sheet.title)
+                all_provenance.extend(provenance)
+
+            # TD-005: detect repeating bid-slot column groups
+            column_groups = _detect_column_groups(sheet, selected_header)
+
+            # TD-008: formula column detection (second pass, per sheet)
+            formula_columns = _detect_formula_columns(workbook_path, sheet.title)
 
             notes = f"classification_score={classification['score']}"
             profile = SheetProfile(
@@ -145,6 +328,10 @@ def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfi
                 likely_business_meaning=classification["business_meaning"],
                 classifier_hints=classification["hints"],
                 notes=notes,
+                control_rows=control_rows,
+                coupa_sheet_type=classification.get("coupa_sheet_type"),
+                column_groups=column_groups,
+                formula_columns=formula_columns,
             )
             sheet_profiles.append(profile)
 
@@ -153,6 +340,8 @@ def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfi
             workbook_name=workbook_name,
             sheets=sheet_profiles,
             notes=f"profiled_sheet_count={len(sheet_profiles)}",
+            lane_provenance=all_provenance,
+            dropdown_catalog=dropdown_catalog,
         )
     finally:
         workbook.close()
