@@ -8,17 +8,22 @@ Modes
 mock  (default) — deterministic rule-based mappings derived from inspection of
                   the RXO FTL LaneExport and Coupa bid template column names.
                   No network calls; suitable for local development and testing.
-live  — reserved for future Foundry agent integration (raises NotImplementedError).
+live  — iterative LLM mapping via LLMMappingService + FoundryAgentClient.
+        Uses 3-round refinement (propose → self-critique → refine).
+        Low-confidence mappings (< review_threshold) go to pending_review.
 
 The plan is keyed by template_fingerprint so it can be cached and reused across
 repeat bid cycles without re-running the planner.
 """
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any
 
 from ..models.contracts import FieldMapping, ReverseMappingPlan, TemplateProfile
+from .foundry_agent_client import FoundryAgentClient
+from .llm_mapping_service import LLMMappingService
 
 # ---------------------------------------------------------------------------
 # Mock mapping rules
@@ -81,23 +86,41 @@ _MOCK_ASSUMPTIONS = [
 
 
 class ReversePlanner:
-    """Build a ReverseMappingPlan from a TemplateProfile and export columns."""
+    """Build a ReverseMappingPlan from a TemplateProfile and export columns.
 
-    def __init__(self, mode: str = "mock") -> None:
+    Args:
+        mode: ``"mock"`` for rule-based defaults, ``"live"`` for LLM iterative mapping.
+        review_threshold: Confidence score below which a mapping is sent to pending_review.
+        max_iterations: Maximum LLM refinement rounds (live mode only).
+        foundry_mode: Passed to FoundryAgentClient (``"mock"`` or ``"live"``).
+    """
+
+    def __init__(
+        self,
+        mode: str = "mock",
+        review_threshold: float = 0.70,
+        max_iterations: int = 3,
+        foundry_mode: str | None = None,
+    ) -> None:
         if mode not in ("mock", "live"):
             raise ValueError(f"Unknown planner mode: {mode!r}. Use 'mock' or 'live'.")
         self.mode = mode
+        self.review_threshold = review_threshold
+        self.max_iterations = max_iterations
+        # Foundry mode: honour explicit env var; default to mock for local testing.
+        # planner_mode=live means "use iterative LLM logic", not necessarily a real endpoint.
+        self._foundry_mode = foundry_mode or os.getenv("REHYDRATE_FOUNDRY_MODE", "mock")
 
     def build_plan(
         self,
         template_profile: TemplateProfile,
         export_columns: list[str] | None = None,
     ) -> ReverseMappingPlan:
-        if self.mode == "live":
-            raise NotImplementedError(
-                "Live Foundry agent planning is not yet implemented. Use mode='mock'."
-            )
-        return self._mock_plan(template_profile)
+        if self.mode == "mock":
+            return self._mock_plan(template_profile)
+        return self._live_plan(template_profile, export_columns or [])
+
+    # ── mock ──────────────────────────────────────────────────────────────────
 
     def _mock_plan(self, template_profile: TemplateProfile) -> ReverseMappingPlan:
         mappings = [
@@ -106,6 +129,8 @@ class ReversePlanner:
                 target_column=m["target_column"],
                 bid_slot=m["bid_slot"],
                 value_transform=m.get("value_transform"),
+                confidence_score=1.0,
+                reasoning="rule-based mock mapping",
             )
             for m in _MOCK_MAPPINGS
         ]
@@ -115,4 +140,49 @@ class ReversePlanner:
             planner_mode="mock",
             mappings=mappings,
             assumptions=_MOCK_ASSUMPTIONS,
+            pending_review=[],
+            iterations_run=0,
+        )
+
+    # ── live (LLM) ────────────────────────────────────────────────────────────
+
+    def _live_plan(
+        self,
+        template_profile: TemplateProfile,
+        export_columns: list[str],
+    ) -> ReverseMappingPlan:
+        # Collect writable template column names from all bid sheet profiles
+        template_cols: list[str] = []
+        for sheet_profile in template_profile.bid_sheets:
+            for slot in sheet_profile.bid_slots:
+                template_cols.extend(slot.writable_columns)
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_template_cols = [c for c in template_cols if not (c in seen or seen.add(c))]  # type: ignore[func-returns-value]
+
+        client = FoundryAgentClient(mode=self._foundry_mode)
+        svc = LLMMappingService(
+            client=client,
+            review_threshold=self.review_threshold,
+            max_iterations=self.max_iterations,
+        )
+        field_mappings, pending_review, iterations_run = svc.map(
+            export_columns=export_columns,
+            template_columns=unique_template_cols,
+        )
+
+        assumptions = [
+            f"LLM mapping ran {iterations_run} refinement round(s).",
+            f"Review threshold: {self.review_threshold} — {len(pending_review)} mapping(s) flagged for human review.",
+            "Only column names were provided to the LLM; no data values were shared.",
+        ]
+
+        return ReverseMappingPlan(
+            plan_id=str(uuid.uuid4()),
+            template_fingerprint=template_profile.template_fingerprint,
+            planner_mode="live",
+            mappings=field_mappings,
+            assumptions=assumptions,
+            pending_review=pending_review,
+            iterations_run=iterations_run,
         )

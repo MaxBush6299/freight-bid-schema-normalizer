@@ -9,12 +9,21 @@ Usage
         --export    "source_docs/FTL LaneExport.xlsx" \\
         --output-root artifacts/local_rehydrate
 
+    # LLM mapping with human-in-the-loop for low-confidence fields:
+    python -m src.function_app.local_rehydrate_runner \\
+        --template  "source_docs/Original Customer File 1.xlsx" \\
+        --export    "source_docs/FTL LaneExport.xlsx" \\
+        --planner-mode live \\
+        --interactive \\
+        --confidence-threshold 0.70
+
 Outputs (written to <output-root>/<run_id>/)
 --------------------------------------------
     submission.xlsx        — original template with pricing filled in
     write_report.json      — cells written / skipped / no-bid lanes
     template_profile.json  — TemplateProfile used for this run
     mapping_plan.json      — ReverseMappingPlan used for this run
+    pending_review.json    — low-confidence mappings (empty list when mode=mock)
 """
 from __future__ import annotations
 
@@ -26,6 +35,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from .models.contracts import FieldMapping, HumanReviewRequest
 from .services.reverse_planner import ReversePlanner
 from .services.template_aware_writer import TemplateAwareWriter, resolve_instructions
 from .services.template_profiler import TemplateProfiler
@@ -52,11 +62,50 @@ def _load_export_rows(export_path: str) -> tuple[list[dict[str, Any]], list[str]
         wb.close()
 
 
+def _interactive_review(
+    pending: list[HumanReviewRequest],
+    mappings: list[FieldMapping],
+) -> list[FieldMapping]:
+    """Prompt the user to accept or override each low-confidence mapping.
+
+    Updates the mapping list in-place and returns it.
+    """
+    if not pending:
+        return mappings
+
+    print("\n" + "=" * 60)
+    print("HUMAN REVIEW REQUIRED")
+    print(f"{len(pending)} mapping(s) have confidence below the review threshold.")
+    print("For each, press Enter to accept the LLM suggestion, or type an override.\n")
+
+    mapping_by_src = {fm.source_field: fm for fm in mappings}
+
+    for req in pending:
+        print(f"  Source field : {req.source_field!r}")
+        print(f"  LLM target   : {req.target_column!r} (confidence {req.confidence_score:.0%})")
+        if req.reasoning:
+            print(f"  Reasoning    : {req.reasoning}")
+        override = input("  Override target (or Enter to accept): ").strip()
+        if override:
+            req.override_value = override
+            if req.source_field in mapping_by_src:
+                mapping_by_src[req.source_field].target_column = override
+                mapping_by_src[req.source_field].reasoning = f"human override: {override!r}"
+            print(f"  ✓ Overridden → {override!r}\n")
+        else:
+            print("  ✓ Accepted\n")
+
+    print("=" * 60 + "\n")
+    return mappings
+
+
 def run_rehydrate(
     template_path: str,
     export_path: str,
     output_root: str,
     planner_mode: str = "mock",
+    confidence_threshold: float = 0.70,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     run_dir = Path(output_root) / run_id
@@ -73,13 +122,17 @@ def run_rehydrate(
     export_rows, export_columns = _load_export_rows(export_path)
 
     # 4. Build mapping plan
-    planner = ReversePlanner(mode=planner_mode)
+    planner = ReversePlanner(mode=planner_mode, review_threshold=confidence_threshold)
     plan = planner.build_plan(template_profile, export_columns)
 
-    # 5. Resolve CellWriteInstructions
+    # 5. Human-in-the-loop for low-confidence mappings
+    if interactive and plan.pending_review:
+        plan.mappings = _interactive_review(plan.pending_review, plan.mappings)
+
+    # 6. Resolve CellWriteInstructions
     instructions, no_bid_lanes = resolve_instructions(export_rows, template_profile, plan)
 
-    # 6. Write submission
+    # 7. Write submission
     submission_path = str(run_dir / "submission.xlsx")
     writer = TemplateAwareWriter()
     write_report = writer.write(
@@ -90,14 +143,19 @@ def run_rehydrate(
     )
     write_report.no_bid_lanes = no_bid_lanes
 
-    # 7. Emit artifacts
+    # 8. Emit artifacts
     profile_path = run_dir / "template_profile.json"
     plan_path = run_dir / "mapping_plan.json"
     report_path = run_dir / "write_report.json"
+    pending_path = run_dir / "pending_review.json"
 
     profile_path.write_text(template_profile.model_dump_json(indent=2), encoding="utf-8")
     plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
     report_path.write_text(write_report.model_dump_json(indent=2), encoding="utf-8")
+    pending_path.write_text(
+        json.dumps([r.model_dump() for r in plan.pending_review], indent=2),
+        encoding="utf-8",
+    )
 
     return {
         "run_id": run_id,
@@ -109,10 +167,13 @@ def run_rehydrate(
         "cells_skipped": write_report.cells_skipped,
         "no_bid_lanes": len(no_bid_lanes),
         "no_bid_lane_names": no_bid_lanes,
+        "pending_review_count": len(plan.pending_review),
+        "llm_iterations": plan.iterations_run,
         "submission": submission_path,
         "write_report": str(report_path),
         "template_profile": str(profile_path),
         "mapping_plan": str(plan_path),
+        "pending_review": str(pending_path),
     }
 
 
@@ -139,7 +200,19 @@ def main() -> None:
         "--planner-mode",
         default="mock",
         choices=["mock", "live"],
-        help="ReversePlanner mode: 'mock' (default) or 'live' (Foundry agent).",
+        help="ReversePlanner mode: 'mock' (default) or 'live' (LLM iterative).",
+    )
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=0.70,
+        help="Confidence score below which a mapping is flagged for review (default 0.70).",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        default=False,
+        help="Prompt for human override on low-confidence mappings before writing.",
     )
     args = parser.parse_args()
 
@@ -148,6 +221,8 @@ def main() -> None:
         export_path=args.export,
         output_root=args.output_root,
         planner_mode=args.planner_mode,
+        confidence_threshold=args.confidence_threshold,
+        interactive=args.interactive,
     )
     print(json.dumps(result, indent=2))
 

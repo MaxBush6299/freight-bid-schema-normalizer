@@ -163,6 +163,18 @@ class FieldMapping(BaseModel):
     target_column: str          # column name in the template bid slot
     bid_slot: int = 0           # 0-based slot index (default = primary bid)
     value_transform: Optional[str] = None  # e.g. "round_2", "upper", "none"
+    confidence_score: float = 1.0          # 0.0–1.0; 1.0 = rule-based / certain
+    reasoning: Optional[str] = None        # LLM explanation for this mapping
+    needs_review: bool = False             # True when confidence_score < threshold
+
+
+class HumanReviewRequest(BaseModel):
+    """A low-confidence mapping surfaced for human confirmation."""
+    source_field: str
+    target_column: str
+    confidence_score: float
+    reasoning: Optional[str] = None
+    override_value: Optional[Any] = None   # human-supplied override (None = accept LLM choice)
 
 
 class ReverseMappingPlan(BaseModel):
@@ -172,6 +184,8 @@ class ReverseMappingPlan(BaseModel):
     planner_mode: str           # "mock" or "live"
     mappings: List[FieldMapping]
     assumptions: List[str]
+    pending_review: List[HumanReviewRequest] = []  # low-confidence mappings awaiting human sign-off
+    iterations_run: int = 0                         # LLM refinement rounds used (0 for mock)
 
 
 class CellWriteInstruction(BaseModel):
