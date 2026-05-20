@@ -238,49 +238,59 @@ def _parse_validation_info(sheet: Worksheet) -> dict[str, list[str]]:
     return catalog
 
 
-def _detect_formula_columns(workbook_path: str, sheet_name: str) -> list[int]:
-    """TD-008: Re-open the workbook WITHOUT data_only to detect formula cells.
+def _detect_all_formula_columns(workbook_path: str, sheet_names: list[str]) -> dict[str, list[int]]:
+    """TD-008: Single-pass formula detection across all sheets.
 
-    Returns a sorted list of 1-based column indices that contain at least one
-    formula in the first 50 data rows.
+    Opens the workbook once with data_only=False and scans the first 60 rows
+    of each requested sheet using iter_rows() (efficient for ReadOnlyWorksheet).
+    Returns {sheet_name: [1-based col indices]}.
+
+    NOTE: Only meaningful for native .xlsx files. Files converted from .xls
+    via xlrd will never contain formula strings, so callers should pass an
+    empty sheet_names list to skip this pass entirely.
     """
+    result: dict[str, list[int]] = {name: [] for name in sheet_names}
+    if not sheet_names:
+        return result
     try:
         wb = load_workbook(workbook_path, data_only=False, read_only=True)
-        sheet = wb[sheet_name] if sheet_name in wb.sheetnames else None
-        if sheet is None:
-            wb.close()
-            return []
-
-        formula_cols: set[int] = set()
-        max_row = min(sheet.max_row or 1, 60)
-        max_col = sheet.max_column or 1
-        for row_idx in range(1, max_row + 1):
-            for col_idx in range(1, max_col + 1):
-                val = sheet.cell(row=row_idx, column=col_idx).value
-                if isinstance(val, str) and val.startswith("="):
-                    formula_cols.add(col_idx)
+        for sheet_name in sheet_names:
+            if sheet_name not in wb.sheetnames:
+                continue
+            sheet = wb[sheet_name]
+            formula_cols: set[int] = set()
+            for row in sheet.iter_rows(max_row=60):
+                for cell in row:
+                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                        formula_cols.add(cell.column)
+            result[sheet_name] = sorted(formula_cols)
         wb.close()
-        return sorted(formula_cols)
     except Exception:
-        return []
+        pass
+    return result
 
 
-def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfile:
-    workbook = load_workbook(workbook_path, data_only=True, read_only=True)
+def profile_workbook(workbook_path: str, sample_size: int = 10, detect_formulas: bool = True) -> WorkbookProfile:
+    # Load without read_only so .cell(row, col) access is O(1) throughout all helpers.
+    workbook = load_workbook(workbook_path, data_only=True)
     try:
         sheet_profiles: list[SheetProfile] = []
         all_provenance: list[LaneProvenanceEntry] = []
         dropdown_catalog: dict[str, list[str]] = {}
 
-        # TD-007: parse validationInfo first (hidden sheet — use a second open for it)
-        validation_info_wb = load_workbook(workbook_path, data_only=True, read_only=False)
-        try:
-            for ws_name in validation_info_wb.sheetnames:
-                if _VALIDATION_INFO_NAME_RE.match(ws_name):
-                    dropdown_catalog = _parse_validation_info(validation_info_wb[ws_name])
-                    break
-        finally:
-            validation_info_wb.close()
+        # TD-007: parse validationInfo — reuse the already-open workbook
+        for ws_name in workbook.sheetnames:
+            if _VALIDATION_INFO_NAME_RE.match(ws_name):
+                dropdown_catalog = _parse_validation_info(workbook[ws_name])
+                break
+
+        # TD-008: single-pass formula detection (skipped for xls-converted files —
+        # xlrd strips formulas to values, so the pass would always return empty).
+        # Uses a separate open with data_only=False so formula strings are visible.
+        all_sheet_names = [ws.title for ws in workbook.worksheets]
+        formula_columns_by_sheet = _detect_all_formula_columns(
+            workbook_path, all_sheet_names if detect_formulas else []
+        )
 
         for sheet in workbook.worksheets:
             # TD-002: collect control rows before header detection
@@ -310,8 +320,8 @@ def profile_workbook(workbook_path: str, sample_size: int = 10) -> WorkbookProfi
             # TD-005: detect repeating bid-slot column groups
             column_groups = _detect_column_groups(sheet, selected_header)
 
-            # TD-008: formula column detection (second pass, per sheet)
-            formula_columns = _detect_formula_columns(workbook_path, sheet.title)
+            # TD-008: formula columns from the pre-computed single-pass map
+            formula_columns = formula_columns_by_sheet.get(sheet.title, [])
 
             notes = f"classification_score={classification['score']}"
             profile = SheetProfile(
