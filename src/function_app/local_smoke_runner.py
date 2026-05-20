@@ -10,6 +10,7 @@ from .services.output_writer import normalize_records_to_canonical, write_canoni
 from .services.template_loader import load_canonical_schema
 from .services.validation_service import validate_canonical_records
 from .services.workbook_profiler import profile_workbook
+from .services.xls_converter import ensure_xlsx
 
 
 def _pick_value(row: dict[str, Any], candidates: list[str]) -> Any:
@@ -61,7 +62,9 @@ def _build_smoke_records(profile: Any, max_rows: int = 3) -> list[dict[str, Any]
 
 def run_smoke(input_workbook: str, output_root: str) -> dict[str, Any]:
     schema = load_canonical_schema("src/function_app/templates/canonical_schema.freight_bid_v1.json")
-    profile = profile_workbook(input_workbook)
+    # TD-001: pre-convert .xls to .xlsx before profiling
+    _converted, _did_convert = ensure_xlsx(input_workbook)
+    profile = profile_workbook(str(_converted))
 
     run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     run_dir = Path(output_root) / f"smoke_{run_id}"

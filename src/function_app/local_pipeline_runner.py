@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from .services.pipeline_runner import run_pipeline
+from .services.xls_converter import ensure_xlsx
 
 
 def _load_local_settings_env() -> None:
