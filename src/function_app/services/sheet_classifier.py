@@ -48,13 +48,21 @@ def _detect_coupa_sheet_type(sheet_name: str, sample_rows: list[dict[str, Any]])
     return None
 
 
-def classify_sheet(sheet_name: str, columns: list[str], sample_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def classify_sheet(sheet_name: str, columns: list[str], sample_rows: list[dict[str, Any]], control_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     normalized_name = (sheet_name or "").strip().lower()
     hints: list[str] = []
     score = 0
 
-    # TD-004: Coupa detection takes priority over generic heuristics
+    # TD-004: Coupa detection takes priority over generic heuristics.
+    # Check sample_rows first; fall back to control_rows (which contain pre-header
+    # tokens like <<bid|...>> that appear before the column header row).
     coupa_type = _detect_coupa_sheet_type(normalized_name, sample_rows)
+    if coupa_type is None and control_rows:
+        control_text_rows = [
+            {str(i): v for i, v in enumerate(row.get("values", []))}
+            for row in control_rows
+        ]
+        coupa_type = _detect_coupa_sheet_type(normalized_name, control_text_rows)
     if coupa_type == "coupa_bid_data":
         return {
             "likely_exclude": False,

@@ -21,15 +21,16 @@ class LaneProvenanceEntry(BaseModel):
 # ── TD-005: Repeating bid-slot column group ───────────────────────────────────
 
 class ColumnGroup(BaseModel):
-    """One repeating bid-slot group within a Coupa bid sheet.
+    """One repeating bid-slot group within a customer bid sheet.
 
-    Coupa templates contain 4 identical column groups per data row, each
+    The template contains 4 identical column groups per data row, each
     separated by a hidden "Lot Name" sentinel column.
     """
     group_index: int            # 0-based index (slot 0 = primary bid)
     lot_name: str               # value of the hidden sentinel column
     col_offset: int             # 1-based column index where this group starts
     columns: List[str]          # header names within this group
+    column_indices: List[int] = Field(default_factory=list)  # absolute 1-based col index per column
 
 
 # ── Sheet & Workbook profiles ─────────────────────────────────────────────────
@@ -126,59 +127,66 @@ class ExecutionResult(BaseModel):
     error: Optional[str]
 
 
-class SchemaFingerprint(BaseModel):
-    schema_fingerprint_sha256: str
-    schema_signature_payload: Dict[str, Any]
+# ── Phase 1: Reverse Pipeline (Rehydrate) contracts ──────────────────────────
+
+class TemplateBidSlot(BaseModel):
+    """One repeating bid-slot group within a template bid sheet."""
+    slot_index: int             # 0-based; slot 0 is the primary bid
+    lot_name: str               # value of the hidden Lot Name sentinel column
+    col_offset: int             # 1-based absolute column where this slot starts
+    columns: List[str]          # all header names in this slot
+    column_indices: List[int]   # absolute 1-based col index for each entry in columns
+    writable_columns: List[str] # subset of columns that are not formula/token-protected
+    formula_col_indices: List[int]  # 1-based absolute column indices that are formulas
 
 
-class SchemaCacheEntry(BaseModel):
-    id: str
-    schema_fingerprint_sha256: str
-    schema_signature_payload: Dict[str, Any]
-    canonical_schema_name: str
-    planner_output: Dict[str, Any]
-    planner_output_hash: str
-    approval_status: str = "draft"
-    approval_source: Optional[str] = None
-    auto_approve_enabled: bool = False
-    first_seen_at: str
-    last_seen_at: str
-    use_count: int = 1
-    created_from_run_id: Optional[str] = None
-    last_used_run_id: Optional[str] = None
-    notes: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+class TemplateSheetProfile(BaseModel):
+    """Focused profile of a single bid sheet within the customer template."""
+    sheet_name: str
+    header_row: int
+    route_name_col: int         # 1-based column index of the Route Name cell per data row
+    bid_slots: List[TemplateBidSlot]
+    lane_provenance: List[LaneProvenanceEntry]  # route_name → row_index map for this sheet
 
-class CanonicalSchemaColumn(BaseModel):
-    name: str
-    dtype: str
-    required: bool = False
-    normalization: Optional[str] = None
-    default: Optional[Any] = None
-    allowed_values: Optional[List[Any]] = None
-    derived_formula: Optional[str] = None
 
-class CanonicalSchema(BaseModel):
-    schema_name: str
-    columns: List[CanonicalSchemaColumn]
-    description: Optional[str] = None
+class TemplateProfile(BaseModel):
+    """Full reverse-pipeline profile of the original customer template."""
+    workbook_name: str
+    bid_sheets: List[TemplateSheetProfile]
+    dropdown_catalog: Dict[str, List[str]]
+    template_fingerprint: str   # sha256[:16] of workbook bytes — cache key for ReversePlanner
 
-class AgentResponse(BaseModel):
-    relevant_sheets: List[str]
-    ignored_sheets: List[str]
-    mapping_plan: Dict[str, Any]
-    constants: Dict[str, Any]
-    enrichments: Dict[str, Any]
+
+class FieldMapping(BaseModel):
+    """One field mapping rule: export column → template bid-slot column."""
+    source_field: str           # column name in the priced export file
+    target_column: str          # column name in the template bid slot
+    bid_slot: int = 0           # 0-based slot index (default = primary bid)
+    value_transform: Optional[str] = None  # e.g. "round_2", "upper", "none"
+
+
+class ReverseMappingPlan(BaseModel):
+    """Reusable plan that maps export fields to template cells."""
+    plan_id: str
+    template_fingerprint: str
+    planner_mode: str           # "mock" or "live"
+    mappings: List[FieldMapping]
     assumptions: List[str]
-    confidence_scores: Dict[str, float]
-    python_script: str
-    tests: Optional[List[str]]
-    notes_json: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
 
-class ExecutionResult(BaseModel):
-    status: str
-    run_id: str
-    output_path: Optional[str]
-    artifacts: Optional[List[str]]
-    validation_summary: Optional[Dict[str, Any]]
-    error: Optional[str]
+
+class CellWriteInstruction(BaseModel):
+    """A single resolved cell write: sheet + row + col + value."""
+    sheet_name: str
+    row_index: int              # 1-based
+    col_index: int              # 1-based
+    value: Any
+    source_route_name: str
+    source_field: str
+
+
+class WriteReport(BaseModel):
+    """Summary artifact produced by TemplateAwareWriter."""
+    cells_written: int
+    cells_skipped: int
+    no_bid_lanes: List[str]     # Route Names present in template but missing from export
+    write_log: List[Dict[str, Any]]

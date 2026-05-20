@@ -147,20 +147,28 @@ def _calculate_empty_column_ratio(columns: list[str], sample_rows: list[dict[str
 
 
 def _extract_lane_provenance(sheet: Worksheet, sheet_name: str) -> list[LaneProvenanceEntry]:
-    """TD-003: Scan for <<define>> rows and return one entry per Route Name."""
+    """TD-003: Scan for <<define>> rows and return one entry per Route Name.
+
+    The <<define>> token appears in column 3 (C) of the Coupa template, with
+    Route Name in column 4 (D). We scan the first non-empty cell in each row
+    to locate the token rather than assuming column 1.
+    """
     entries: list[LaneProvenanceEntry] = []
     max_row = sheet.max_row or 1
     for row_index in range(1, max_row + 1):
-        first_cell = _stringify(sheet.cell(row=row_index, column=1).value)
-        if _COUPA_DEFINE_RE.match(first_cell):
-            # Route Name is in column D (index 4)
-            route_name = _stringify(sheet.cell(row=row_index, column=4).value)
-            if route_name:
-                entries.append(LaneProvenanceEntry(
-                    route_name=route_name,
-                    sheet_name=sheet_name,
-                    row_index=row_index,
-                ))
+        # Scan the first few columns for the <<define>> token
+        for col_idx in range(1, 6):
+            cell_text = _stringify(sheet.cell(row=row_index, column=col_idx).value)
+            if _COUPA_DEFINE_RE.match(cell_text):
+                # Route Name is one column to the right of <<define>>
+                route_name = _stringify(sheet.cell(row=row_index, column=col_idx + 1).value)
+                if route_name:
+                    entries.append(LaneProvenanceEntry(
+                        route_name=route_name,
+                        sheet_name=sheet_name,
+                        row_index=row_index,
+                    ))
+                break
     return entries
 
 
@@ -172,6 +180,7 @@ def _detect_column_groups(sheet: Worksheet, header_row: int) -> list[ColumnGroup
     max_col = sheet.max_column or 1
     groups: list[ColumnGroup] = []
     current_group_cols: list[str] = []
+    current_group_indices: list[int] = []
     current_group_start: int | None = None
     group_index = 0
 
@@ -194,15 +203,18 @@ def _detect_column_groups(sheet: Worksheet, header_row: int) -> list[ColumnGroup
                     lot_name=header_val,
                     col_offset=current_group_start,
                     columns=list(current_group_cols),
+                    column_indices=list(current_group_indices),
                 ))
                 group_index += 1
             current_group_cols = []
+            current_group_indices = []
             current_group_start = None
         else:
             if header_val:
                 if current_group_start is None:
                     current_group_start = col_idx
                 current_group_cols.append(header_val)
+                current_group_indices.append(col_idx)
 
     # Flush last group
     if current_group_cols and current_group_start is not None:
@@ -211,6 +223,7 @@ def _detect_column_groups(sheet: Worksheet, header_row: int) -> list[ColumnGroup
             lot_name="",
             col_offset=current_group_start,
             columns=current_group_cols,
+            column_indices=current_group_indices,
         ))
 
     # Only return groups if we found more than one (otherwise it's not a repeating structure)
@@ -245,6 +258,10 @@ def _detect_all_formula_columns(workbook_path: str, sheet_names: list[str]) -> d
     of each requested sheet using iter_rows() (efficient for ReadOnlyWorksheet).
     Returns {sheet_name: [1-based col indices]}.
 
+    Only rows where col A does NOT contain a Coupa control token are considered.
+    This prevents control/banner rows (<<hidecolumn>>, <<bid|...>>, etc.) from
+    tainting input columns with template-behaviour formulas.
+
     NOTE: Only meaningful for native .xlsx files. Files converted from .xls
     via xlrd will never contain formula strings, so callers should pass an
     empty sheet_names list to skip this pass entirely.
@@ -260,6 +277,10 @@ def _detect_all_formula_columns(workbook_path: str, sheet_names: list[str]) -> d
             sheet = wb[sheet_name]
             formula_cols: set[int] = set()
             for row in sheet.iter_rows(max_row=60):
+                # Skip control rows (col A contains a Coupa token)
+                col_a_val = row[0].value if row else None
+                if col_a_val is not None and isinstance(col_a_val, str) and _COUPA_TOKEN_RE.match(col_a_val):
+                    continue
                 for cell in row:
                     if isinstance(cell.value, str) and cell.value.startswith("="):
                         formula_cols.add(cell.column)
@@ -307,7 +328,7 @@ def profile_workbook(workbook_path: str, sample_size: int = 10, detect_formulas:
                 values = [row.get(column) for row in sample_rows]
                 inferred_types[column] = _infer_type(values)
 
-            classification = classify_sheet(sheet.title, columns, sample_rows)
+            classification = classify_sheet(sheet.title, columns, sample_rows, control_rows=control_rows)
             duplicate_headers = _find_duplicate_headers(columns)
             empty_ratio = _calculate_empty_column_ratio(columns, sample_rows)
 
