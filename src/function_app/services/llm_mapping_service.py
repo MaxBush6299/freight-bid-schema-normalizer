@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, List, Optional
 
 from ..models.contracts import FieldMapping, HumanReviewRequest
@@ -26,8 +27,10 @@ from .foundry_agent_client import FoundryAgentClient
 
 logger = logging.getLogger(__name__)
 
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Prompt templates (inline to avoid extra file dependencies for the mock path)
+# Prompt templates (inline fallback; live mode reads from prompts/ directory)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\

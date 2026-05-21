@@ -72,7 +72,7 @@ param foundryAgentVersion string = '5'
 param foundryApiVersion string = '2025-05-15-preview'
 
 @description('Foundry model fallback name used by runtime client.')
-param foundryModel string = 'gpt-4.1'
+param foundryModel string = 'gpt-5.4'
 
 @description('Canonical schema template name.')
 param canonicalSchemaName string = 'freight_bid_v1'

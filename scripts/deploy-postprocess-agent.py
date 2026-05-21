@@ -122,7 +122,7 @@ def main() -> None:
 
     # ── Create new version (creates agent implicitly if needed) ───
     next_ver = str(int(current_version) + 1) if current_version.isdigit() else "1"
-    model_name = os.environ.get("FOUNDRY_MODEL", "gpt-4.1")
+    model_name = os.environ.get("FOUNDRY_MODEL", "gpt-5.4")
 
     print(f"\nCreating version {next_ver} for agent '{agent_name}'...")
     definition = PromptAgentDefinition(

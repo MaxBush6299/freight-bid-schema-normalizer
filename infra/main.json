@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.39.26.7824",
-      "templateHash": "3505385779119756512"
+      "templateHash": "2574749367238588560"
     }
   },
   "parameters": {
@@ -150,7 +150,7 @@
     },
     "foundryModel": {
       "type": "string",
-      "defaultValue": "gpt-4.1",
+      "defaultValue": "gpt-5.4",
       "metadata": {
         "description": "Foundry model fallback name used by runtime client."
       }
@@ -659,7 +659,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.39.26.7824",
-              "templateHash": "11939050131861571309"
+              "templateHash": "3942426287488029682"
             }
           },
           "parameters": {
@@ -693,6 +693,41 @@
               "defaultValue": "proj-rxo",
               "metadata": {
                 "description": "Name of the Foundry project to create under the account."
+              }
+            },
+            "modelName": {
+              "type": "string",
+              "defaultValue": "gpt-5.4",
+              "metadata": {
+                "description": "OpenAI model name to deploy. gpt-5.4 (2026-03-05) is GlobalStandard GA in eastus."
+              }
+            },
+            "modelVersion": {
+              "type": "string",
+              "defaultValue": "2026-03-05",
+              "metadata": {
+                "description": "OpenAI model version to deploy."
+              }
+            },
+            "modelSkuName": {
+              "type": "string",
+              "defaultValue": "GlobalStandard",
+              "allowedValues": [
+                "GlobalStandard",
+                "DataZoneStandard",
+                "Standard",
+                "GlobalProvisioned",
+                "Provisioned"
+              ],
+              "metadata": {
+                "description": "Model deployment SKU. GlobalStandard is the default pay-as-you-go tier."
+              }
+            },
+            "modelCapacity": {
+              "type": "int",
+              "defaultValue": 10,
+              "metadata": {
+                "description": "Tokens-per-minute capacity in thousands (1 = 1 000 TPM)."
               }
             }
           },
@@ -732,6 +767,26 @@
               "dependsOn": [
                 "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
               ]
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2024-04-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), parameters('modelName'))]",
+              "sku": {
+                "name": "[parameters('modelSkuName')]",
+                "capacity": "[parameters('modelCapacity')]"
+              },
+              "properties": {
+                "model": {
+                  "format": "OpenAI",
+                  "name": "[parameters('modelName')]",
+                  "version": "[parameters('modelVersion')]"
+                },
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
             }
           ],
           "outputs": {
@@ -758,6 +813,10 @@
             "projectName": {
               "type": "string",
               "value": "[parameters('projectName')]"
+            },
+            "modelDeploymentName": {
+              "type": "string",
+              "value": "[parameters('modelName')]"
             }
           }
         }
