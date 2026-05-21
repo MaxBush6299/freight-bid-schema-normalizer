@@ -13,7 +13,7 @@ param tenantId string = subscription().tenantId
 @description('Tags applied to the key vault.')
 param tags object = {}
 
-var keyVaultName = toLower(take(replace('kv-${baseName}-${environmentName}', '_', '-'), 24))
+var keyVaultName = toLower(take('kv-${uniqueString(resourceGroup().id, baseName, environmentName)}', 24))
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName

@@ -22,6 +22,9 @@ param containerNames array = [
   'input'
   'output'
   'artifacts'
+  'export'
+  'outbox'
+  'templates'
 ]
 
 @description('Create queue resources.')
@@ -86,6 +89,20 @@ param foundryPostProcessAgentVersion string = '1'
   'live'
 ])
 param postprocessMode string = 'mock'
+
+@description('Rehydrate (reverse pipeline) planner mode.')
+@allowed([
+  'mock'
+  'live'
+])
+param rehydratePlannerMode string = 'mock'
+
+@description('Foundry client mode for the Rehydrate LLM mapping service.')
+@allowed([
+  'mock'
+  'live'
+])
+param rehydrateFoundryMode string = 'mock'
 
 @description('Optional preconfigured Foundry assistant ID for runtime fallback. Bicep does not create/manage assistants.')
 param foundryAssistantId string = ''
@@ -206,6 +223,9 @@ module functionPlan './modules/functionPlan.bicep' = {
 var artifactContainerName = contains(containerNames, 'artifacts') ? 'artifacts' : containerNames[0]
 var inputContainerName = contains(containerNames, 'input') ? 'input' : containerNames[0]
 var outputContainerName = contains(containerNames, 'output') ? 'output' : containerNames[0]
+var exportContainerName = contains(containerNames, 'export') ? 'export' : containerNames[0]
+var outboxContainerName = contains(containerNames, 'outbox') ? 'outbox' : containerNames[0]
+var templateContainerName = contains(containerNames, 'templates') ? 'templates' : containerNames[0]
 
 module functionApp './modules/functionApp.bicep' = {
   name: 'functionapp'
@@ -238,6 +258,12 @@ module functionApp './modules/functionApp.bicep' = {
       ENABLE_LLM_VALIDATION: 'false'
       MAX_SCRIPT_EXECUTION_SECONDS: '45'
       MAX_PROFILE_SAMPLE_ROWS: '25'
+      // Reverse pipeline (Rehydrate) settings
+      EXPORT_CONTAINER: exportContainerName
+      OUTBOX_CONTAINER: outboxContainerName
+      TEMPLATE_CONTAINER: templateContainerName
+      REHYDRATE_PLANNER_MODE: rehydratePlannerMode
+      REHYDRATE_FOUNDRY_MODE: rehydrateFoundryMode
     }
     tags: tags
   }

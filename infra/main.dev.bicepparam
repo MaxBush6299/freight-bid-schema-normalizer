@@ -21,6 +21,9 @@ param foundryPostProcessAgentName = 'RXO-Notes-PostProcessor'
 param foundryPostProcessAgentVersion = '1'
 param postprocessMode = 'mock'
 
+param rehydratePlannerMode = 'mock'
+param rehydrateFoundryMode = 'mock'
+
 param foundryAccountName = ''
 param foundryProjectName = 'proj-default'
 param createFoundryProject = false
@@ -30,9 +33,7 @@ param enableWebApp = false
 param webAppPlanSkuName = 'F1'
 param webAppPlanSkuTier = 'Free'
 
-param enableStreamlitContainerApp = true
-param acrLoginServer = 'rxodocnormacr.azurecr.io'
-param streamlitContainerImage = 'streamlit-ui:v3'
+param enableStreamlitContainerApp = false
 
 param enableContainerWorker = false
 param assignContainerWorkerRoles = false
