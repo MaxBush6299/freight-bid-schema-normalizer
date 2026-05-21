@@ -53,6 +53,8 @@ class TemplateDiffReport(BaseModel):
     expected_writes: int
     unexpected_changes: int
     missing_writes: int
+    warning_count: int = 0
+    no_bid_lanes: list[str] = Field(default_factory=list)
     violations: list[DiffCell] = Field(default_factory=list)
     missing_writes_detail: list[DiffCell] = Field(default_factory=list)
     passed: bool
@@ -251,6 +253,8 @@ class TemplateDiffValidator:
             expected_writes=confirmed_writes,
             unexpected_changes=len(violations),
             missing_writes=len(missing),
+            warning_count=len(write_report.warnings),
+            no_bid_lanes=write_report.no_bid_lanes,
             violations=violations,
             missing_writes_detail=missing,
             passed=len(violations) == 0,

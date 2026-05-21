@@ -198,9 +198,30 @@ class CellWriteInstruction(BaseModel):
     source_field: str
 
 
+class ReverseValidationIssue(BaseModel):
+    """Validation issue emitted by the reverse-pipeline submission builder."""
+    code: str
+    severity: str
+    message: str
+    route_name: Optional[str] = None
+    sheet_name: Optional[str] = None
+    row_index: Optional[int] = None
+
+
+class ReverseValidationReport(BaseModel):
+    """Validation summary for the reverse pipeline."""
+    status: str
+    passed: bool
+    issues: List[ReverseValidationIssue] = Field(default_factory=list)
+    issue_counts: Dict[str, int] = Field(default_factory=dict)
+    no_bid_lanes: List[str] = Field(default_factory=list)
+
+
 class WriteReport(BaseModel):
     """Summary artifact produced by TemplateAwareWriter."""
     cells_written: int
     cells_skipped: int
     no_bid_lanes: List[str]     # Route Names present in template but missing from export
+    warnings: List[ReverseValidationIssue] = Field(default_factory=list)
+    validation_summary: Optional[ReverseValidationReport] = None
     write_log: List[Dict[str, Any]]

@@ -29,18 +29,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
 
-from .models.contracts import FieldMapping, HumanReviewRequest
+from .models.contracts import (
+    FieldMapping,
+    HumanReviewRequest,
+    ReverseValidationIssue,
+    ReverseValidationReport,
+    TemplateProfile,
+)
 from .services.reverse_planner import ReversePlanner
 from .services.template_aware_writer import TemplateAwareWriter, resolve_instructions
 from .services.template_diff_validator import TemplateDiffValidator
 from .services.template_profiler import TemplateProfiler
 from .services.xls_converter import ensure_xlsx
+
+logger = logging.getLogger(__name__)
 
 
 def _load_export_rows(export_path: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -61,6 +70,41 @@ def _load_export_rows(export_path: str) -> tuple[list[dict[str, Any]], list[str]
         return records, headers
     finally:
         wb.close()
+
+
+def _build_reverse_validation_report(
+    no_bid_lanes: list[str],
+    template_profile: TemplateProfile,
+) -> ReverseValidationReport:
+    """Build warning issues for template lanes missing from the priced export."""
+    provenance_by_route = {}
+    for sheet_profile in template_profile.bid_sheets:
+        for entry in sheet_profile.lane_provenance:
+            provenance_by_route.setdefault(entry.route_name, entry)
+    warnings: list[ReverseValidationIssue] = []
+
+    unique_no_bid_lanes = list(dict.fromkeys(no_bid_lanes))
+    for route_name in unique_no_bid_lanes:
+        provenance = provenance_by_route.get(route_name)
+        warnings.append(ReverseValidationIssue(
+            code="no_bid_lane",
+            severity="warning",
+            route_name=route_name,
+            sheet_name=provenance.sheet_name if provenance else None,
+            row_index=provenance.row_index if provenance else None,
+            message=(
+                "Template lane was not present in the priced export; "
+                "submission cells were left blank for this route."
+            ),
+        ))
+
+    return ReverseValidationReport(
+        status="Passed",
+        passed=True,
+        issues=warnings,
+        issue_counts={"error": 0, "warning": len(warnings)},
+        no_bid_lanes=unique_no_bid_lanes,
+    )
 
 
 def _interactive_review(
@@ -143,6 +187,16 @@ def run_rehydrate(
         template_profile=template_profile,
     )
     write_report.no_bid_lanes = no_bid_lanes
+    write_report.validation_summary = _build_reverse_validation_report(no_bid_lanes, template_profile)
+    write_report.warnings = write_report.validation_summary.issues
+    for warning in write_report.warnings:
+        logger.warning(
+            "Reverse pipeline warning: %s route=%s sheet=%s row=%s",
+            warning.code,
+            warning.route_name,
+            warning.sheet_name,
+            warning.row_index,
+        )
 
     # 8. Diff validation — assert only writable cells changed
     diff_path = run_dir / "template_diff.json"
@@ -180,6 +234,8 @@ def run_rehydrate(
         "cells_skipped": write_report.cells_skipped,
         "no_bid_lanes": len(no_bid_lanes),
         "no_bid_lane_names": no_bid_lanes,
+        "validation_warnings": write_report.validation_summary.issue_counts["warning"] if write_report.validation_summary else 0,
+        "warnings": [warning.model_dump() for warning in write_report.warnings],
         "pending_review_count": len(plan.pending_review),
         "llm_iterations": plan.iterations_run,
         "diff_passed": diff_report.passed,

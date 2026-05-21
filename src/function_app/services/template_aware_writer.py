@@ -157,6 +157,7 @@ def resolve_instructions(
 
     instructions: list[CellWriteInstruction] = []
     no_bid_lanes: list[str] = []
+    seen_no_bid_routes: set[str] = set()
 
     for tsp in template_profile.bid_sheets:
         # Build a normalized_header→absolute_col_index lookup for each bid slot
@@ -170,7 +171,9 @@ def resolve_instructions(
             row_idx = provenance_entry.row_index
 
             if route_name not in export_by_route:
-                no_bid_lanes.append(route_name)
+                if route_name not in seen_no_bid_routes:
+                    no_bid_lanes.append(route_name)
+                    seen_no_bid_routes.add(route_name)
                 continue
 
             export_row = export_by_route[route_name]
