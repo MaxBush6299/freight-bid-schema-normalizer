@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.39.26.7824",
-      "templateHash": "8693326932291387046"
+      "templateHash": "3505385779119756512"
     }
   },
   "parameters": {
@@ -291,6 +291,20 @@
       "defaultValue": false,
       "metadata": {
         "description": "Whether to create the Foundry project resource under an existing account."
+      }
+    },
+    "enableFoundry": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy a dedicated Azure AI Foundry account and project via the foundry module."
+      }
+    },
+    "foundryNewProjectName": {
+      "type": "string",
+      "defaultValue": "proj-rxo",
+      "metadata": {
+        "description": "Foundry project name to create when enableFoundry=true."
       }
     },
     "assignFoundryRoles": {
@@ -606,6 +620,144 @@
             "connectionString": {
               "type": "securestring",
               "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1};EndpointSuffix={2}', variables('storageAccountName'), listKeys('storageAccount', '2023-05-01').keys[0].value, environment().suffixes.storage)]"
+            }
+          }
+        }
+      }
+    },
+    "foundry": {
+      "condition": "[parameters('enableFoundry')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "foundry",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "baseName": {
+            "value": "[parameters('baseName')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "projectName": {
+            "value": "[parameters('foundryNewProjectName')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.39.26.7824",
+              "templateHash": "11939050131861571309"
+            }
+          },
+          "parameters": {
+            "baseName": {
+              "type": "string",
+              "metadata": {
+                "description": "Base name used to build resource names."
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Deployment environment name (dev, test, prod)."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for all resources."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags applied to created resources."
+              }
+            },
+            "projectName": {
+              "type": "string",
+              "defaultValue": "proj-rxo",
+              "metadata": {
+                "description": "Name of the Foundry project to create under the account."
+              }
+            }
+          },
+          "variables": {
+            "accountName": "[take(format('ais-{0}', uniqueString(resourceGroup().id, parameters('baseName'), parameters('environmentName'))), 64)]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[variables('accountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AIServices",
+              "sku": {
+                "name": "S0"
+              },
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "customSubDomainName": "[variables('accountName')]",
+                "publicNetworkAccess": "Enabled",
+                "disableLocalAuth": false,
+                "allowProjectManagement": true
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/projects",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), parameters('projectName'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {},
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "accountName": {
+              "type": "string",
+              "value": "[variables('accountName')]"
+            },
+            "accountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+            },
+            "accountEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', variables('accountName')), '2025-04-01-preview').endpoint]"
+            },
+            "projectEndpoint": {
+              "type": "string",
+              "value": "[format('{0}api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('accountName')), '2025-04-01-preview').endpoint, parameters('projectName'))]"
+            },
+            "projectResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), parameters('projectName'))]"
+            },
+            "projectName": {
+              "type": "string",
+              "value": "[parameters('projectName')]"
             }
           }
         }
@@ -1013,7 +1165,7 @@
             "value": {
               "RUN_MODE": "[parameters('runMode')]",
               "PLANNER_MODE": "[parameters('plannerMode')]",
-              "FOUNDRY_PROJECT_ENDPOINT": "[parameters('foundryProjectEndpoint')]",
+              "FOUNDRY_PROJECT_ENDPOINT": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'projectEndpoint', 'value'), parameters('foundryProjectEndpoint')), parameters('foundryProjectEndpoint'))]",
               "FOUNDRY_AGENT_NAME": "[parameters('foundryAgentName')]",
               "FOUNDRY_AGENT_VERSION": "[parameters('foundryAgentVersion')]",
               "FOUNDRY_API_VERSION": "[parameters('foundryApiVersion')]",
@@ -1260,6 +1412,7 @@
         }
       },
       "dependsOn": [
+        "foundry",
         "functionPlan",
         "keyVault",
         "monitoring",
@@ -1959,7 +2112,7 @@
             "value": true
           },
           "assignFoundryRoles": {
-            "value": "[parameters('assignFoundryRoles')]"
+            "value": "[or(parameters('assignFoundryRoles'), parameters('enableFoundry'))]"
           },
           "assignWorkerRoles": {
             "value": "[parameters('assignContainerWorkerRoles')]"
@@ -1971,20 +2124,16 @@
             "value": "[parameters('enableWebApp')]"
           },
           "assignWebAppFoundryRoles": {
-            "value": "[and(parameters('enableWebApp'), parameters('assignFoundryRoles'))]"
+            "value": "[and(parameters('enableWebApp'), or(parameters('assignFoundryRoles'), parameters('enableFoundry')))]"
           },
           "assignStreamlitAppRoles": {
             "value": "[parameters('enableStreamlitContainerApp')]"
           },
           "assignStreamlitAppFoundryRoles": {
-            "value": "[and(parameters('enableStreamlitContainerApp'), parameters('assignFoundryRoles'))]"
+            "value": "[and(parameters('enableStreamlitContainerApp'), or(parameters('assignFoundryRoles'), parameters('enableFoundry')))]"
           },
-          "foundryAccountName": {
-            "value": "[parameters('foundryAccountName')]"
-          },
-          "foundryProjectName": {
-            "value": "[parameters('foundryProjectName')]"
-          }
+          "foundryAccountName": "[if(parameters('enableFoundry'), createObject('value', reference('foundry').outputs.accountName.value), createObject('value', parameters('foundryAccountName')))]",
+          "foundryProjectName": "[if(parameters('enableFoundry'), createObject('value', reference('foundry').outputs.projectName.value), createObject('value', parameters('foundryProjectName')))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -2336,6 +2485,7 @@
       },
       "dependsOn": [
         "containerWorker",
+        "foundry",
         "functionApp",
         "keyVault",
         "storage",
@@ -2596,6 +2746,14 @@
     "foundryProjectResourceId": {
       "type": "string",
       "value": "[if(parameters('createFoundryProject'), resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), '')]"
+    },
+    "foundryAccountName": {
+      "type": "string",
+      "value": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'accountName', 'value'), parameters('foundryAccountName')), parameters('foundryAccountName'))]"
+    },
+    "foundryProjectEndpoint": {
+      "type": "string",
+      "value": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'projectEndpoint', 'value'), parameters('foundryProjectEndpoint')), parameters('foundryProjectEndpoint'))]"
     },
     "containerWorkerJobResourceId": {
       "type": "string",

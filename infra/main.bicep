@@ -142,6 +142,12 @@ param foundryProjectName string = 'proj-default'
 @description('Whether to create the Foundry project resource under an existing account.')
 param createFoundryProject bool = false
 
+@description('Deploy a dedicated Azure AI Foundry account and project via the foundry module.')
+param enableFoundry bool = false
+
+@description('Foundry project name to create when enableFoundry=true.')
+param foundryNewProjectName string = 'proj-rxo'
+
 @description('Whether to assign Foundry data-plane roles to the Function App identity.')
 param assignFoundryRoles bool = false
 
@@ -185,6 +191,23 @@ module storage './modules/storage.bicep' = {
     tags: tags
   }
 }
+
+// ── Foundry (optional dedicated AI Services account + project) ──
+module foundry './modules/foundry.bicep' = if (enableFoundry) {
+  name: 'foundry'
+  params: {
+    baseName: baseName
+    environmentName: environmentName
+    location: location
+    projectName: foundryNewProjectName
+    tags: tags
+  }
+}
+
+// Resolved Foundry endpoint: prefer the dedicated module output, fall back to param
+var resolvedFoundryEndpoint = enableFoundry
+  ? foundry.?outputs.projectEndpoint ?? foundryProjectEndpoint
+  : foundryProjectEndpoint
 
 module monitoring './modules/monitoring.bicep' = {
   name: 'monitoring'
@@ -244,7 +267,7 @@ module functionApp './modules/functionApp.bicep' = {
     additionalAppSettings: {
       RUN_MODE: runMode
       PLANNER_MODE: plannerMode
-      FOUNDRY_PROJECT_ENDPOINT: foundryProjectEndpoint
+      FOUNDRY_PROJECT_ENDPOINT: resolvedFoundryEndpoint
       FOUNDRY_AGENT_NAME: foundryAgentName
       FOUNDRY_AGENT_VERSION: foundryAgentVersion
       FOUNDRY_API_VERSION: foundryApiVersion
@@ -344,6 +367,10 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-0
   }
 }
 
+// Resolved Foundry account/project names for RBAC: prefer new module, fall back to params
+var resolvedFoundryAccountName = enableFoundry ? foundry.outputs.accountName : foundryAccountName
+var resolvedFoundryProjectName = enableFoundry ? foundry.outputs.projectName : foundryProjectName
+
 module roles './modules/roles.bicep' = {
   name: 'roles'
   params: {
@@ -354,15 +381,15 @@ module roles './modules/roles.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     keyVaultName: keyVault.outputs.keyVaultName
     grantQueueRole: true
-    assignFoundryRoles: assignFoundryRoles
+    assignFoundryRoles: assignFoundryRoles || enableFoundry
     assignWorkerRoles: assignContainerWorkerRoles
     assignWorkerFoundryRoles: assignContainerWorkerFoundryRoles
     assignWebAppRoles: enableWebApp
-    assignWebAppFoundryRoles: enableWebApp && assignFoundryRoles
+    assignWebAppFoundryRoles: enableWebApp && (assignFoundryRoles || enableFoundry)
     assignStreamlitAppRoles: enableStreamlitContainerApp
-    assignStreamlitAppFoundryRoles: enableStreamlitContainerApp && assignFoundryRoles
-    foundryAccountName: foundryAccountName
-    foundryProjectName: foundryProjectName
+    assignStreamlitAppFoundryRoles: enableStreamlitContainerApp && (assignFoundryRoles || enableFoundry)
+    foundryAccountName: resolvedFoundryAccountName
+    foundryProjectName: resolvedFoundryProjectName
   }
 }
 
@@ -390,6 +417,8 @@ output storageBlobEndpoint string = storage.outputs.primaryBlobEndpoint
 output keyVaultUri string = keyVault.outputs.keyVaultUri
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output foundryProjectResourceId string = createFoundryProject ? foundryProject.id : ''
+output foundryAccountName string = enableFoundry ? foundry.?outputs.accountName ?? foundryAccountName : foundryAccountName
+output foundryProjectEndpoint string = resolvedFoundryEndpoint
 output containerWorkerJobResourceId string = containerWorker.outputs.workerJobResourceId
 output containerWorkerManagedEnvironmentId string = containerWorker.outputs.workerManagedEnvironmentId
 output containerWorkerPrincipalId string = containerWorker.outputs.workerPrincipalId

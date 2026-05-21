@@ -12,7 +12,7 @@ param tags = {
 param plannerMode = 'live'
 param runMode = 'execute_with_validation'
 
-param foundryProjectEndpoint = 'https://demo-foundry-eastus.services.ai.azure.com/api/projects/proj-default'
+param foundryProjectEndpoint = ''
 param foundryAgentName = 'RXO-Document-Normalizer'
 param foundryAgentVersion = '5'
 param foundryAssistantId = ''
@@ -27,7 +27,9 @@ param rehydrateFoundryMode = 'mock'
 param foundryAccountName = ''
 param foundryProjectName = 'proj-default'
 param createFoundryProject = false
-param assignFoundryRoles = false
+param enableFoundry = true
+param foundryNewProjectName = 'proj-rxo'
+param assignFoundryRoles = true
 
 param enableWebApp = false
 param webAppPlanSkuName = 'F1'
