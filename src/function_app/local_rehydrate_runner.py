@@ -38,6 +38,7 @@ from openpyxl import load_workbook
 from .models.contracts import FieldMapping, HumanReviewRequest
 from .services.reverse_planner import ReversePlanner
 from .services.template_aware_writer import TemplateAwareWriter, resolve_instructions
+from .services.template_diff_validator import TemplateDiffValidator
 from .services.template_profiler import TemplateProfiler
 from .services.xls_converter import ensure_xlsx
 
@@ -143,7 +144,19 @@ def run_rehydrate(
     )
     write_report.no_bid_lanes = no_bid_lanes
 
-    # 8. Emit artifacts
+    # 8. Diff validation — assert only writable cells changed
+    diff_path = run_dir / "template_diff.json"
+    validator = TemplateDiffValidator()
+    diff_report = validator.validate(
+        template_path=str(template_xlsx),
+        submission_path=submission_path,
+        template_profile=template_profile,
+        write_report=write_report,
+        run_id=run_id,
+        output_path=str(diff_path),
+    )
+
+    # 9. Emit artifacts
     profile_path = run_dir / "template_profile.json"
     plan_path = run_dir / "mapping_plan.json"
     report_path = run_dir / "write_report.json"
@@ -169,11 +182,15 @@ def run_rehydrate(
         "no_bid_lane_names": no_bid_lanes,
         "pending_review_count": len(plan.pending_review),
         "llm_iterations": plan.iterations_run,
+        "diff_passed": diff_report.passed,
+        "diff_violations": diff_report.unexpected_changes,
+        "diff_missing_writes": diff_report.missing_writes,
         "submission": submission_path,
         "write_report": str(report_path),
         "template_profile": str(profile_path),
         "mapping_plan": str(plan_path),
         "pending_review": str(pending_path),
+        "template_diff": str(diff_path),
     }
 
 

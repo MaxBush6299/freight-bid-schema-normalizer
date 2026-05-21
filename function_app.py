@@ -302,10 +302,11 @@ def rehydrate_submission_http(req: func.HttpRequest) -> func.HttpResponse:
                 overwrite=True,
             )
 
-    summary = {k: v for k, v in result.items() if k not in ("submission", "write_report", "template_profile", "mapping_plan", "pending_review")}
+    summary = {k: v for k, v in result.items() if k not in ("submission", "write_report", "template_profile", "mapping_plan", "pending_review", "template_diff", "run_dir")}
     summary["outbox_prefix"] = outbox_prefix
     summary["submission_blob"] = f"{outbox_prefix}/submission.xlsx"
     summary["pending_review_blob"] = f"{outbox_prefix}/pending_review.json"
+    summary["template_diff_blob"] = f"{outbox_prefix}/template_diff.json"
 
     return func.HttpResponse(
         json.dumps(summary),
@@ -325,7 +326,7 @@ def get_submission_status(req: func.HttpRequest) -> func.HttpResponse:
     Query params:
         export_blob  — the export blob name used (needed to compute outbox prefix)
         artifact     — specific artifact to download: submission | mapping_plan |
-                        write_report | template_profile | pending_review
+                        write_report | template_profile | pending_review | template_diff
                         (omit to get a JSON index of all artifacts)
     """
     outbox_container = os.getenv("OUTBOX_CONTAINER", "outbox").strip() or "outbox"
@@ -352,6 +353,7 @@ def get_submission_status(req: func.HttpRequest) -> func.HttpResponse:
         "write_report": "write_report.json",
         "template_profile": "template_profile.json",
         "pending_review": "pending_review.json",
+        "template_diff": "template_diff.json",
     }
 
     if artifact_name:
