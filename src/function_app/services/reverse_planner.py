@@ -160,7 +160,11 @@ class ReversePlanner:
         seen: set[str] = set()
         unique_template_cols = [c for c in template_cols if not (c in seen or seen.add(c))]  # type: ignore[func-returns-value]
 
-        client = FoundryAgentClient(mode=self._foundry_mode)
+        client = FoundryAgentClient(
+            mode=self._foundry_mode,
+            agent_name=os.getenv("FOUNDRY_REVERSE_MAPPER_AGENT_NAME", "RXO-Reverse-Mapper"),
+            agent_version=os.getenv("FOUNDRY_REVERSE_MAPPER_AGENT_VERSION", "1"),
+        )
         svc = LLMMappingService(
             client=client,
             review_threshold=self.review_threshold,
