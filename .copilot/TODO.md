@@ -2,7 +2,7 @@
 
 ## Project status
 - Status: In progress
-- Current milestone: Real core pipeline execution path wired (planner->sandbox->canonical output)
+- Current milestone: Reverse pipeline (Rehydrate) end-to-end with Streamlit UI and Function endpoints; CI lint+tests enforced
 
 ## Completed
 - [x] Reviewed `software_spec.md`
@@ -93,20 +93,32 @@
 - [x] Updated remote Foundry agent system prompt to policy-compliant contract (`RXO-Document-Normalizer:3`)
 - [x] Added assistants/threads-runs live invocation path in client for project endpoints
 - [x] Verified end-to-end live pipeline success (`planner_mode=live`, 467 rows, validation `Passed`)
+- [x] Phase 11 — Intake tech debt (TD-001..TD-008): xls→xlsx conversion, repeating bid-slot detection, formula detection, validationInfo dropdown extraction, lane provenance
+- [x] Phase 12 — Reverse pipeline core: TemplateProfiler, ReversePlanner (mock + live), TemplateAwareWriter, TemplateDiffValidator, local_rehydrate_runner CLI
+- [x] Phase 12.5 — Function App endpoints for rehydrate: `RehydrateSubmissionBlob` (event-grid), `RehydrateSubmissionHttp` (POST), `GetSubmissionStatus` (GET)
+- [x] Phase 13 — CI + test coverage hardening
+  - [x] CI workflow triggers on `master` + `main` + `feature/**`; pytest failures now fail the build
+  - [x] Fixed canonical schema tests for 41-column template (`Notes JSON` appended)
+  - [x] Skipped second-pass formula detection on xls-converted workbooks (performance)
+  - [x] Ruff cleanup: imports sorted, line-length bumped to 120, all `src/` clean
+  - [x] Added 23 reverse-pipeline unit tests (TemplateProfiler, TemplateAwareWriter, TemplateDiffValidator, run_rehydrate)
+  - [x] Streamlit companion app: added Rehydrate Submission page with Direct + HTTP run targets
+  - [x] README refreshed with reverse-pipeline runbook, env vars, and Streamlit usage
 
 ## In progress
-- [ ] Add CI workflow baseline for lint + tests
+- [ ] None — open the merge/PR conversation for `feature/rxo-reverse-pipeline`
 
 ## Next up
 - [ ] Refine profiler heuristics and confidence scoring
 - [ ] Add planning-service contract tests for structured planner response schema
 - [ ] Add blob-trigger integration test strategy (likely mocked function context + sample blob)
 - [ ] Add deterministic validation thresholds configuration surface
-- [ ] Add CI workflow baseline for lint + tests
 - [ ] Add artifact lifecycle/retention policy handling for blob mode
+- [ ] Live Foundry integration test for the reverse pipeline `live` planner mode (parity with forward pipeline)
+- [ ] Deploy reverse pipeline endpoints to dev Function App and smoke-test against real customer template + export
 
 ## Blockers
-- Live Foundry execution is blocked by endpoint/API compatibility in current provided value (`HTTP 400 API version not supported` after authenticated calls). Need the exact deployed Foundry chat/agent endpoint + supported API version for this project.
+- None outstanding.  (Forward pipeline Foundry HTTP 400 was resolved by promoting agent prompt to RXO-Document-Normalizer:3 and using the assistants/threads-runs path.)
 
 ## Decisions made
 - The software spec and implementation plan are the governing design documents.
@@ -157,6 +169,12 @@
 - Result: Passed (36 tests) after packaging/tooling baseline additions
 - Ran: `& 'c:/Users/stephenmiano/RXO document normalizer/.venv/Scripts/python.exe' -m unittest tests/test_artifact_store_blob.py tests/test_artifact_store.py tests/test_sandbox_executor.py tests/test_script_policy.py tests/test_pipeline_runner.py tests/test_planning_service.py tests/test_template_loader.py tests/test_normalization_service.py tests/test_validation_service.py tests/test_output_writer.py tests/test_sheet_classifier.py tests/test_workbook_profiler.py`
 - Result: Passed (38 tests)
+- Ran: `python -m pytest tests/ -q` (with reverse-pipeline coverage)
+- Result: Passed (75 tests)
+- Ran: `ruff check src/ tests/`
+- Result: All checks passed
+- Ran: `python -m src.function_app.local_rehydrate_runner --template "source_docs/Original Customer File 1.xlsx" --export "source_docs/RXO LaneExport.xlsx" --output-root "artifacts/local_rehydrate" --planner-mode live`
+- Result: 90 cells written, diff_passed=True, 0 violations (see `artifacts/local_rehydrate/20260520230655/`)
 - Ran: `& 'c:/Users/stephenmiano/RXO document normalizer/.venv/Scripts/python.exe' -m src.function_app.local_pipeline_runner --input "examples/inputs/Input 8.xlsx" --output-root "artifacts/local_pipeline" --run-mode execute_with_validation --planner-mode mock`
 - Result: Passed (real pipeline execution; 467 rows emitted with full planner/sandbox/validation artifacts)
 
