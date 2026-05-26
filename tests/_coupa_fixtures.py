@@ -159,8 +159,10 @@ def build_export_workbook(
     """Write a synthetic priced-export workbook compatible with the mock plan.
 
     The mock ReversePlanner expects these source headers:
-    ``Origin Note`` (join key — Route Name), ``RXO All In Customer Rate``,
-    ``MX Cost``, ``Equipment Type Detail``, ``Customer FSC Type``, ``Currency``.
+    ``Origin Note`` (join key — Route Name), ``Customer Linehaul Rate``
+    (the linehaul rate written to Freight Price), ``RXO All In Customer Rate``
+    (kept for legacy writer tests that still reference it), ``MX Cost``,
+    ``Equipment Type Detail``, ``Customer FSC Type``, ``Currency``.
 
     Parameters
     ----------
@@ -179,6 +181,7 @@ def build_export_workbook(
 
     headers = [
         "Origin Note",
+        "Customer Linehaul Rate",
         "RXO All In Customer Rate",
         "MX Cost",
         "Equipment Type Detail",
@@ -191,29 +194,34 @@ def build_export_workbook(
         ws.cell(row=1, column=col_idx).value = header
 
     for row_offset, route_name in enumerate(routes, start=2):
+        linehaul = 1500.0 + row_offset
+        all_in = linehaul + 220.0  # synthetic "fuel" surcharge baked in
         ws.cell(row=row_offset, column=1).value = route_name
-        ws.cell(row=row_offset, column=2).value = 1500.0 + row_offset  # rate
-        ws.cell(row=row_offset, column=3).value = 0.0                  # MX cost
-        ws.cell(row=row_offset, column=4).value = "V53DV"
-        ws.cell(row=row_offset, column=5).value = "Diesel"
-        ws.cell(row=row_offset, column=6).value = "USD"
+        ws.cell(row=row_offset, column=2).value = linehaul
+        ws.cell(row=row_offset, column=3).value = all_in
+        ws.cell(row=row_offset, column=4).value = 0.0                  # MX cost
+        ws.cell(row=row_offset, column=5).value = "V53DV"
+        ws.cell(row=row_offset, column=6).value = "Diesel"
+        ws.cell(row=row_offset, column=7).value = "USD"
         if include_descriptors:
-            ws.cell(row=row_offset, column=7).value = "OriginCity"
-            ws.cell(row=row_offset, column=8).value = "ST"
+            ws.cell(row=row_offset, column=8).value = "OriginCity"
+            ws.cell(row=row_offset, column=9).value = "ST"
 
     if extra_route_without_template_match:
         extra_row = len(routes) + 2
         ws.cell(row=extra_row, column=1).value = extra_route_without_template_match
         ws.cell(row=extra_row, column=2).value = 9999.0
+        ws.cell(row=extra_row, column=3).value = 10219.0
 
     if duplicate_first_route and routes:
         dup_row = ws.max_row + 1
         ws.cell(row=dup_row, column=1).value = routes[0]
         ws.cell(row=dup_row, column=2).value = 7777.0
-        ws.cell(row=dup_row, column=3).value = 0.0
-        ws.cell(row=dup_row, column=4).value = "V53DV"
-        ws.cell(row=dup_row, column=5).value = "Diesel"
-        ws.cell(row=dup_row, column=6).value = "USD"
+        ws.cell(row=dup_row, column=3).value = 7997.0
+        ws.cell(row=dup_row, column=4).value = 0.0
+        ws.cell(row=dup_row, column=5).value = "V53DV"
+        ws.cell(row=dup_row, column=6).value = "Diesel"
+        ws.cell(row=dup_row, column=7).value = "USD"
 
     wb.save(str(path))
     return path
