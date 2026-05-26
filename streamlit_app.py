@@ -12,12 +12,14 @@ import streamlit as st
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
+from src.function_app.local_rehydrate_runner import run_rehydrate
 from src.function_app.services.foundry_agent_client import FoundryAgentClient
 from src.function_app.services.pipeline_runner import run_pipeline
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
 EXAMPLE_INPUTS_DIR = WORKSPACE_ROOT / "examples" / "inputs"
 STREAMLIT_OUTPUT_ROOT = WORKSPACE_ROOT / "artifacts" / "streamlit_runs"
+STREAMLIT_REHYDRATE_OUTPUT_ROOT = WORKSPACE_ROOT / "artifacts" / "streamlit_rehydrate_runs"
 LOCAL_SETTINGS_PATH = WORKSPACE_ROOT / "local.settings.json"
 AZURITE_COMPAT_API_VERSION = "2021-12-02"
 
@@ -72,6 +74,18 @@ def _validate_blob_trigger_configuration() -> list[str]:
     for key in ["INPUT_CONTAINER", "OUTPUT_CONTAINER"]:
         if not os.getenv(key, "").strip():
             missing.append(key)
+    return missing
+
+
+def _validate_rehydrate_blob_configuration() -> list[str]:
+    """Validate config needed to push export/template blobs and call the function."""
+    missing: list[str] = []
+    has_conn_str = bool(os.getenv("AzureWebJobsStorage", "").strip())
+    has_account_name = bool(os.getenv("STORAGE_ACCOUNT_NAME", "").strip())
+    if not has_conn_str and not has_account_name:
+        missing.append("AzureWebJobsStorage or STORAGE_ACCOUNT_NAME")
+    # Containers default to export/templates/outbox in the Function app — only
+    # flag them when explicitly blanked out.
     return missing
 
 
@@ -1083,6 +1097,334 @@ def _create_new_run() -> dict[str, Any] | None:
     return None
 
 
+def _create_rehydrate_run() -> dict[str, Any] | None:
+    """Render the Rehydrate Submission page.
+
+    Lets the user pick a customer template + priced export and run the
+    reverse pipeline via one of two targets:
+
+    * **Direct (local artifacts)** — calls ``run_rehydrate`` in-process and
+      writes artifacts under ``artifacts/streamlit_rehydrate_runs/<run_id>/``.
+    * **Function HTTP endpoint** — uploads both files to the configured
+      blob containers, then POSTs ``{export_blob, template_blob,
+      planner_mode}`` to the ``rehydrate`` HTTP-triggered function.
+    """
+    import requests  # local import to avoid hard dependency for non-HTTP users
+
+    st.subheader("Rehydrate Submission (Reverse Pipeline)")
+    st.caption(
+        "Fill a customer's original bid template back in with priced "
+        "lanes from a LaneExport file."
+    )
+
+    example_files = sorted(EXAMPLE_INPUTS_DIR.glob("*.xls*"))
+
+    # ── File uploads ──────────────────────────────────────────────
+    uploaded = st.file_uploader(
+        "Upload an additional template or export (saved under examples/inputs)",
+        type=["xlsx", "xls"],
+        key="rehydrate_upload",
+    )
+    if uploaded is not None:
+        dest = EXAMPLE_INPUTS_DIR / uploaded.name
+        if not dest.exists() or st.checkbox(
+            f"Overwrite existing {uploaded.name}?", value=False, key="rehydrate_overwrite"
+        ):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(uploaded.getvalue())
+            st.success(f"Saved to {dest}")
+            example_files = sorted(EXAMPLE_INPUTS_DIR.glob("*.xls*"))
+
+    if not example_files:
+        st.error("No example files found under examples/inputs. Upload a template and an export to continue.")
+        return None
+
+    col1, col2 = st.columns(2)
+    with col1:
+        template_path = st.selectbox(
+            "Customer template (.xlsx / .xls)",
+            options=example_files,
+            format_func=lambda p: p.name,
+            key="rehydrate_template_select",
+        )
+    with col2:
+        export_path = st.selectbox(
+            "Priced export (LaneExport)",
+            options=example_files,
+            index=min(1, len(example_files) - 1),
+            format_func=lambda p: p.name,
+            key="rehydrate_export_select",
+        )
+
+    if template_path is not None and export_path is not None and template_path == export_path:
+        st.warning("Template and export are the same file — select two different workbooks.")
+
+    planner_mode = st.selectbox("Planner mode", options=["mock", "live"], key="rehydrate_planner_mode")
+    confidence_threshold = st.slider(
+        "Confidence threshold (live mode)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.70,
+        step=0.05,
+        key="rehydrate_confidence",
+    )
+    run_target = st.selectbox(
+        "Run target",
+        options=["Direct (local artifacts)", "Function HTTP endpoint"],
+        key="rehydrate_run_target",
+    )
+
+    # ── Per-target config + warnings ──────────────────────────────
+    if planner_mode == "live":
+        missing_live = _validate_live_mode_configuration()
+        if missing_live:
+            st.error(
+                "Live planner mode is missing required configuration: "
+                + ", ".join(missing_live)
+                + ". Add these to local.settings.json (Values) or your environment."
+            )
+
+    if run_target.startswith("Direct"):
+        st.info(
+            f"Direct mode writes artifacts under `{STREAMLIT_REHYDRATE_OUTPUT_ROOT.relative_to(WORKSPACE_ROOT)}` "
+            "and does NOT contact blob storage or the Function host."
+        )
+    else:
+        function_url = st.text_input(
+            "Function endpoint URL",
+            value=os.getenv("REHYDRATE_FUNCTION_URL", "http://localhost:7071/api/rehydrate"),
+            key="rehydrate_function_url",
+            help=(
+                "Local dev: http://localhost:7071/api/rehydrate · "
+                "Azure: https://<funcapp>.azurewebsites.net/api/rehydrate?code=<key>"
+            ),
+        )
+        export_container = os.getenv("EXPORT_CONTAINER", "export").strip() or "export"
+        template_container = os.getenv("TEMPLATE_CONTAINER", "templates").strip() or "templates"
+        outbox_container = os.getenv("OUTBOX_CONTAINER", "outbox").strip() or "outbox"
+        st.caption(
+            f"Blob containers — export: `{export_container}`, "
+            f"templates: `{template_container}`, outbox: `{outbox_container}`"
+        )
+        st.warning(
+            "HTTP mode uploads the selected files to blob storage and calls the "
+            "function. If your storage account has public access disabled, ensure "
+            "this Streamlit host is allowed via managed identity or a connection "
+            "string in `AzureWebJobsStorage`."
+        )
+        missing_blob = _validate_rehydrate_blob_configuration()
+        if missing_blob:
+            st.error(
+                "HTTP mode is missing required configuration: "
+                + ", ".join(missing_blob)
+                + "."
+            )
+
+    # ── Run button ────────────────────────────────────────────────
+    if not st.button("Run Rehydrate", type="primary", key="rehydrate_run_button"):
+        return None
+
+    if template_path == export_path:
+        st.error("Cannot run — template and export point to the same file.")
+        return None
+
+    if planner_mode == "live" and _validate_live_mode_configuration():
+        st.stop()
+
+    if run_target.startswith("Direct"):
+        return _run_rehydrate_direct(
+            template_path=Path(template_path),
+            export_path=Path(export_path),
+            planner_mode=planner_mode,
+            confidence_threshold=confidence_threshold,
+        )
+
+    if _validate_rehydrate_blob_configuration():
+        st.stop()
+
+    return _run_rehydrate_http(
+        template_path=Path(template_path),
+        export_path=Path(export_path),
+        planner_mode=planner_mode,
+        function_url=function_url,
+        requests_module=requests,
+    )
+
+
+def _run_rehydrate_direct(
+    *,
+    template_path: Path,
+    export_path: Path,
+    planner_mode: str,
+    confidence_threshold: float,
+) -> dict[str, Any] | None:
+    STREAMLIT_REHYDRATE_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    with st.spinner("Running rehydrate pipeline locally..."):
+        try:
+            result = run_rehydrate(
+                template_path=str(template_path),
+                export_path=str(export_path),
+                output_root=str(STREAMLIT_REHYDRATE_OUTPUT_ROOT),
+                planner_mode=planner_mode,
+                confidence_threshold=confidence_threshold,
+            )
+        except Exception as exc:
+            st.error(f"Rehydrate failed: {exc}")
+            return None
+
+    _render_rehydrate_result(result)
+    return result
+
+
+def _run_rehydrate_http(
+    *,
+    template_path: Path,
+    export_path: Path,
+    planner_mode: str,
+    function_url: str,
+    requests_module: Any,
+) -> dict[str, Any] | None:
+    export_container = os.getenv("EXPORT_CONTAINER", "export").strip() or "export"
+    template_container = os.getenv("TEMPLATE_CONTAINER", "templates").strip() or "templates"
+
+    connection_string = os.getenv("AzureWebJobsStorage", "")
+    try:
+        blob_service = _create_blob_service_client(connection_string)
+    except Exception as exc:
+        st.error(f"Could not create blob client: {exc}")
+        return None
+
+    # Ensure containers exist before uploading
+    for container_name in (export_container, template_container):
+        try:
+            blob_service.get_container_client(container_name).create_container()
+        except Exception:
+            pass  # already exists or no permission to create — upload will surface a clearer error
+
+    with st.spinner(f"Uploading {template_path.name} to '{template_container}'..."):
+        try:
+            blob_service.get_container_client(template_container).upload_blob(
+                name=template_path.name,
+                data=template_path.read_bytes(),
+                overwrite=True,
+            )
+        except Exception as exc:
+            st.error(f"Template upload failed: {exc}")
+            return None
+
+    with st.spinner(f"Uploading {export_path.name} to '{export_container}'..."):
+        try:
+            blob_service.get_container_client(export_container).upload_blob(
+                name=export_path.name,
+                data=export_path.read_bytes(),
+                overwrite=True,
+            )
+        except Exception as exc:
+            st.error(f"Export upload failed: {exc}")
+            return None
+
+    payload = {
+        "export_blob": export_path.name,
+        "template_blob": template_path.name,
+        "planner_mode": planner_mode,
+    }
+    with st.spinner(f"POST {function_url}..."):
+        try:
+            response = requests_module.post(function_url, json=payload, timeout=300)
+        except Exception as exc:
+            st.error(f"HTTP request failed: {exc}")
+            return None
+
+    if response.status_code != 200:
+        st.error(f"Function returned HTTP {response.status_code}: {response.text}")
+        return None
+
+    try:
+        result = response.json()
+    except ValueError:
+        st.error(f"Function returned non-JSON body: {response.text}")
+        return None
+
+    st.success(f"Rehydrate complete (HTTP, run_id={result.get('run_id')!s})")
+    _render_rehydrate_result(result)
+    return result
+
+
+def _render_rehydrate_result(result: dict[str, Any]) -> None:
+    """Render the rehydrate result summary plus artifact download links."""
+    if not result:
+        st.warning("No result returned from rehydrate run.")
+        return
+
+    diff_passed = bool(result.get("diff_passed", False))
+    if diff_passed and result.get("diff_violations", 0) == 0:
+        st.success("Template diff validation PASSED — only writable cells changed.")
+    else:
+        st.error(
+            f"Template diff validation FAILED: {result.get('diff_violations', 0)} "
+            f"unexpected change(s), {result.get('diff_missing_writes', 0)} missing write(s)."
+        )
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Cells written", result.get("cells_written", 0))
+    metric_cols[1].metric("Cells skipped", result.get("cells_skipped", 0))
+    metric_cols[2].metric("No-bid lanes", result.get("no_bid_lanes", 0))
+    metric_cols[3].metric("Pending review", result.get("pending_review_count", 0))
+
+    if result.get("no_bid_lane_names"):
+        st.warning(
+            "No-bid lanes (template routes missing from export):\n- "
+            + "\n- ".join(result["no_bid_lane_names"])
+        )
+
+    if result.get("warnings"):
+        with st.expander(f"Warnings ({len(result['warnings'])})"):
+            st.json(result["warnings"])
+
+    st.subheader("Run summary")
+    summary_keys = {
+        k: result[k]
+        for k in (
+            "run_id", "bid_sheets_profiled", "export_rows_loaded",
+            "instructions_resolved", "cells_written", "cells_skipped",
+            "no_bid_lanes", "validation_warnings", "pending_review_count",
+            "llm_iterations", "diff_passed", "diff_violations", "diff_missing_writes",
+        )
+        if k in result
+    }
+    st.json(summary_keys)
+
+    # Direct-mode result carries local file paths; HTTP result carries blob URIs.
+    submission = result.get("submission")
+    if submission and isinstance(submission, str) and Path(submission).exists():
+        st.subheader("Download artifacts")
+        run_dir = Path(submission).parent
+        st.caption(f"Run directory: `{run_dir}`")
+        cols = st.columns(3)
+        for idx, fname in enumerate([
+            "submission.xlsx", "template_diff.json", "write_report.json",
+            "mapping_plan.json", "template_profile.json", "pending_review.json",
+        ]):
+            artifact = run_dir / fname
+            if artifact.exists():
+                with cols[idx % 3]:
+                    st.download_button(
+                        label=f"⬇ {fname}",
+                        data=artifact.read_bytes(),
+                        file_name=fname,
+                        key=f"rehydrate_dl_{fname}",
+                    )
+    elif result.get("outbox_prefix"):
+        st.subheader("Outbox blobs")
+        st.code(
+            "\n".join([
+                f"submission:     {result.get('submission_blob', '')}",
+                f"template_diff:  {result.get('template_diff_blob', '')}",
+                f"pending_review: {result.get('pending_review_blob', '')}",
+            ]),
+        )
+
+
 def main() -> None:
     _load_local_settings_env()
 
@@ -1106,7 +1448,7 @@ def main() -> None:
             st.session_state["mode"] = "Browse Prior Runs"
         mode = st.radio(
             "Mode",
-            options=["Browse Prior Runs", "Create New Run", "System Agents"],
+            options=["Browse Prior Runs", "Create New Run", "Rehydrate Submission", "System Agents"],
             key="mode",
         )
         refresh = st.button("Refresh Run Index")
@@ -1126,6 +1468,10 @@ def main() -> None:
                 _render_run_details(matching[0])
             else:
                 st.warning(f"Run created at {run_dir} but not found in discovery index yet.")
+        return
+
+    if mode == "Rehydrate Submission":
+        _create_rehydrate_run()
         return
 
     if mode == "System Agents":
