@@ -64,7 +64,7 @@ def run_smoke(input_workbook: str, output_root: str) -> dict[str, Any]:
     schema = load_canonical_schema("src/function_app/templates/canonical_schema.freight_bid_v1.json")
     # TD-001: pre-convert .xls to .xlsx before profiling
     _converted, _did_convert = ensure_xlsx(input_workbook)
-    profile = profile_workbook(str(_converted))
+    profile = profile_workbook(str(_converted), detect_formulas=not _did_convert)
 
     run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     run_dir = Path(output_root) / f"smoke_{run_id}"

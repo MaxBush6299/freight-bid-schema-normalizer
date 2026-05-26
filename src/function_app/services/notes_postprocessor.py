@@ -14,7 +14,6 @@ from typing import Any
 from .foundry_agent_client import FoundryAgentClient
 from .prompt_renderer import PromptRenderer
 
-
 # ── Deterministic rule engine (used in mock mode) ────────────────────────────
 
 _DROP_TRAILER_RE = re.compile(r"drop\s+trailer", re.IGNORECASE)
@@ -67,7 +66,10 @@ _BORDER_RE = re.compile(
 _BORDER_MX_RE = re.compile(r"(mexic|MX\b)", re.IGNORECASE)
 _BORDER_CA_RE = re.compile(r"(canad|CA\s+eManifest|ACI)", re.IGNORECASE)
 
-_TEMP_RE = re.compile(r"(\d+\s*[°]?\s*F|temperature\s+controlled|cold\s+chain|frozen|maintain\s+[\-\d]+)", re.IGNORECASE)
+_TEMP_RE = re.compile(
+    r"(\d+\s*[°]?\s*F|temperature\s+controlled|cold\s+chain|frozen|maintain\s+[\-\d]+)",
+    re.IGNORECASE,
+)
 _SPECIAL_HANDLING_RE = re.compile(
     r"(returnable|pallet\s+jack|loading\s+requirement|weekly\s+run|every\s+\w{3}|seasonal\s+volume|inside\s+delivery|lumper|liftgate|appointment|gate\s+code)",
     re.IGNORECASE,
@@ -129,7 +131,13 @@ def _mock_post_process_row(
             })
 
     # 4. Equipment Type Detail
-    if _is_empty(current_values.get("Equipment Type Detail")) or current_values.get("Equipment Type Detail", "").strip().lower() in ("v", "van", "dry van", ""):
+    current_equip_detail = current_values.get("Equipment Type Detail")
+    equip_detail_is_default = (
+        _is_empty(current_equip_detail)
+        or current_values.get("Equipment Type Detail", "").strip().lower()
+        in ("v", "van", "dry van", "")
+    )
+    if equip_detail_is_default:
         for pattern, equip_name in _EQUIP_PATTERNS:
             m = pattern.search(all_text)
             if m:
@@ -254,7 +262,6 @@ def _mock_post_process_row(
     # Extract special handling keywords with sentence context
     if _SPECIAL_HANDLING_RE.search(all_text):
         for sm in _SPECIAL_HANDLING_RE.finditer(all_text):
-            keyword = sm.group(0).strip()
             # Get surrounding clause for context
             start = all_text.rfind(".", 0, sm.start())
             start = start + 1 if start >= 0 else max(0, sm.start() - 20)
@@ -361,7 +368,6 @@ class NotesPostProcessor:
             for update in row_update.get("updates", []):
                 field = update["field"]
                 new_value = update["new_value"]
-                old_value = update.get("old_value")
                 reason = update.get("reason", "")
 
                 # Apply the update

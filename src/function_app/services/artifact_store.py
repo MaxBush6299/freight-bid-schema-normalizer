@@ -7,7 +7,6 @@ from typing import Any
 
 from azure.storage.blob import BlobServiceClient
 
-
 AZURITE_COMPAT_API_VERSION = "2021-12-02"
 
 

@@ -4,7 +4,6 @@ from typing import Any
 
 from ..models.contracts import CanonicalSchema, CanonicalSchemaColumn
 
-
 DEFAULT_ENUM_VALUES: dict[str, set[str]] = {
     "Origin Country": {"USA", "CAN", "MEX"},
     "Destination Country": {"USA", "CAN", "MEX"},

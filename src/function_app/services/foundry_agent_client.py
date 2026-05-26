@@ -128,11 +128,21 @@ def _row_to_record(row, index_map, row_number):
         "Origin City": val("ORIGIN CITY", "ORIGIN_CITY", "ORIGIN"),
         "Origin State": val("ORIGIN STATE", "ORIGIN_STATE", "ORIGIN ST"),
         "Origin Zip": val("ORIGIN ZIP", "ORIGIN_ZIP", "ORIGIN ZIP CODE", "ORIGIN POSTAL", "ORIGIN_ZIP3"),
-        "Origin Country": "USA" if str(origin_country).strip().upper() in {"US", "USA", "UNITED STATES"} else origin_country,
+        "Origin Country": (
+            "USA"
+            if str(origin_country).strip().upper() in {"US", "USA", "UNITED STATES"}
+            else origin_country
+        ),
         "Destination City": val("DESTINATION CITY", "DESTINATION_CITY", "DESTINATION", "DEST CITY"),
         "Destination State": val("DESTINATION STATE", "DESTINATION_STATE", "DEST STATE", "DEST ST"),
-        "Destination Zip": val("DESTINATION ZIP", "DESTINATION_ZIP", "DEST ZIP", "DEST ZIP CODE", "DEST POSTAL", "DEST_ZIP3"),
-        "Destination Country": "USA" if str(dest_country).strip().upper() in {"US", "USA", "UNITED STATES"} else dest_country,
+        "Destination Zip": val(
+            "DESTINATION ZIP", "DESTINATION_ZIP", "DEST ZIP", "DEST ZIP CODE", "DEST POSTAL", "DEST_ZIP3"
+        ),
+        "Destination Country": (
+            "USA"
+            if str(dest_country).strip().upper() in {"US", "USA", "UNITED STATES"}
+            else dest_country
+        ),
         "Origin Note": str(origin_note).strip() if origin_note else "",
         "Destination Note": str(dest_note).strip() if dest_note else "",
         "Bid Note": str(bid_note).strip() if bid_note else "",

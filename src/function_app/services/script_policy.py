@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-
 BANNED_IMPORTS = {
     "os",
     "subprocess",
@@ -47,7 +46,16 @@ def _node_to_name(node: ast.AST) -> str:
 
 
 def _is_allowed_toplevel_statement(node: ast.AST) -> bool:
-    if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign)):
+    allowed_types = (
+        ast.Import,
+        ast.ImportFrom,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.Assign,
+        ast.AnnAssign,
+    )
+    if isinstance(node, allowed_types):
         return True
     if isinstance(node, ast.Expr):
         return isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)

@@ -7,8 +7,8 @@ Data contracts for RXO Document Normalizer
 - ExecutionResult
 """
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # ── TD-003: Lane provenance entry extracted from Coupa <<define>> rows ────────
 

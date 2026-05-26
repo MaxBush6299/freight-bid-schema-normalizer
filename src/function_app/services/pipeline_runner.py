@@ -54,7 +54,10 @@ def _extract_notes_from_sandbox_result(result: Any) -> list[dict[str, Any]]:
 
 
 def _collect_note_field_candidates(profile: Any) -> list[dict[str, Any]]:
-    note_pattern = re.compile(r"\b(note|notes|comment|comments|remark|remarks|instruction|instructions)\b", re.IGNORECASE)
+    note_pattern = re.compile(
+        r"\b(note|notes|comment|comments|remark|remarks|instruction|instructions)\b",
+        re.IGNORECASE,
+    )
     candidates: list[dict[str, Any]] = []
 
     for sheet in getattr(profile, "sheets", []):
@@ -89,7 +92,10 @@ def _build_planning_constraints(schema: Any, profile: Any) -> dict[str, Any]:
         "canonical_note_fields": canonical_note_fields,
         "note_field_preservation": {
             "enabled": bool(note_field_candidates),
-            "instruction": "If note-like source columns exist, map them to canonical note fields and preserve original text content exactly.",
+            "instruction": (
+                "If note-like source columns exist, map them to canonical note "
+                "fields and preserve original text content exactly."
+            ),
         },
     }
 
@@ -108,7 +114,8 @@ def run_pipeline(
         input_workbook_path = str(_converted_path)
 
     schema = load_canonical_schema("src/function_app/templates/canonical_schema.freight_bid_v1.json")
-    profile = profile_workbook(input_workbook_path)
+    # Skip formula detection for xls-converted files (xlrd strips formulas to values)
+    profile = profile_workbook(input_workbook_path, detect_formulas=not _did_convert)
     planning_constraints = _build_planning_constraints(schema, profile)
     schema_fingerprint = compute_schema_fingerprint(profile)
     selected_planner_mode = (planner_mode or os.getenv("PLANNER_MODE", "mock")).strip().lower()

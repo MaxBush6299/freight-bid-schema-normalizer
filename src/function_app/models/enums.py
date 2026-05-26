@@ -4,6 +4,7 @@ Enumerations for RXO Document Normalizer
 """
 from enum import Enum
 
+
 class RunStatus(str, Enum):
     SUCCEEDED = "Succeeded"
     FAILED = "Failed"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 NON_DATA_KEYWORDS = {
     "requirement": "instructional",
     "requirements": "instructional",
@@ -48,7 +47,12 @@ def _detect_coupa_sheet_type(sheet_name: str, sample_rows: list[dict[str, Any]])
     return None
 
 
-def classify_sheet(sheet_name: str, columns: list[str], sample_rows: list[dict[str, Any]], control_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def classify_sheet(
+    sheet_name: str,
+    columns: list[str],
+    sample_rows: list[dict[str, Any]],
+    control_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     normalized_name = (sheet_name or "").strip().lower()
     hints: list[str] = []
     score = 0

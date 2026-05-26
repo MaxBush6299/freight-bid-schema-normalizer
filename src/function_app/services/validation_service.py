@@ -13,7 +13,6 @@ from .validation_rules import (
     validate_type_consistency,
 )
 
-
 DEFAULT_NULL_RATE_THRESHOLDS: dict[str, float] = {
     "Customer Lane ID": 0.0,
     "FO Code": 0.95,

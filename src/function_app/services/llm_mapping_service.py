@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 
 from ..models.contracts import FieldMapping, HumanReviewRequest
 from .foundry_agent_client import FoundryAgentClient

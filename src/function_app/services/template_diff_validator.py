@@ -31,7 +31,6 @@ from pydantic import BaseModel, Field
 
 from ..models.contracts import TemplateProfile, WriteReport
 
-
 # ── Output contracts ──────────────────────────────────────────────────────────
 
 class DiffCell(BaseModel):

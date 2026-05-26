@@ -11,7 +11,6 @@ from openpyxl.worksheet.worksheet import Worksheet
 from ..models.contracts import ColumnGroup, LaneProvenanceEntry, SheetProfile, WorkbookProfile
 from .sheet_classifier import classify_sheet
 
-
 # ── TD-002: Coupa control-token pattern ───────────────────────────────────────
 _COUPA_TOKEN_RE = re.compile(r"^<<[^>]+>>", re.IGNORECASE)
 
@@ -74,7 +73,10 @@ def _detect_header_row_candidates(sheet: Worksheet, scan_limit: int = 30) -> lis
     max_scan_row = min(sheet.max_row or 1, scan_limit)
 
     for row_index in range(1, max_scan_row + 1):
-        row_values = [sheet.cell(row=row_index, column=column_index).value for column_index in range(1, (sheet.max_column or 1) + 1)]
+        row_values = [
+            sheet.cell(row=row_index, column=column_index).value
+            for column_index in range(1, (sheet.max_column or 1) + 1)
+        ]
         score = _header_score(row_values)
         if score > 0:
             candidates.append((row_index, score))
@@ -97,13 +99,21 @@ def _extract_control_rows(sheet: Worksheet, scan_limit: int = 30) -> list[dict[s
     control_rows: list[dict[str, Any]] = []
     max_scan = min(sheet.max_row or 1, scan_limit)
     for row_index in range(1, max_scan + 1):
-        row_values = [sheet.cell(row=row_index, column=col_idx).value for col_idx in range(1, (sheet.max_column or 1) + 1)]
+        row_values = [
+            sheet.cell(row=row_index, column=col_idx).value
+            for col_idx in range(1, (sheet.max_column or 1) + 1)
+        ]
         if _is_coupa_token_row(row_values):
             control_rows.append({"row_index": row_index, "values": row_values})
     return control_rows
 
 
-def _extract_sample_rows(sheet: Worksheet, header_row: int, columns: list[str], sample_size: int = 10) -> list[dict[str, Any]]:
+def _extract_sample_rows(
+    sheet: Worksheet,
+    header_row: int,
+    columns: list[str],
+    sample_size: int = 10,
+) -> list[dict[str, Any]]:
     sample_rows: list[dict[str, Any]] = []
     if not columns:
         return sample_rows
@@ -188,14 +198,6 @@ def _detect_column_groups(sheet: Worksheet, header_row: int) -> list[ColumnGroup
         header_val = _stringify(sheet.cell(row=header_row, column=col_idx).value)
 
         if _LOT_NAME_RE.search(header_val):
-            try:
-                col_letter = sheet.cell(row=header_row, column=col_idx).column_letter
-                col_dim = sheet.column_dimensions.get(col_letter)
-                is_hidden = col_dim is not None and getattr(col_dim, "hidden", False)
-            except AttributeError:
-                # ReadOnlyWorksheet doesn't expose column_dimensions;
-                # fall back to treating any Lot Name header as a sentinel
-                is_hidden = True
             # Sentinel column — start a new group
             if current_group_cols and current_group_start is not None:
                 groups.append(ColumnGroup(

@@ -234,7 +234,11 @@ def run_rehydrate(
         "cells_skipped": write_report.cells_skipped,
         "no_bid_lanes": len(no_bid_lanes),
         "no_bid_lane_names": no_bid_lanes,
-        "validation_warnings": write_report.validation_summary.issue_counts["warning"] if write_report.validation_summary else 0,
+        "validation_warnings": (
+            write_report.validation_summary.issue_counts["warning"]
+            if write_report.validation_summary
+            else 0
+        ),
         "warnings": [warning.model_dump() for warning in write_report.warnings],
         "pending_review_count": len(plan.pending_review),
         "llm_iterations": plan.iterations_run,
