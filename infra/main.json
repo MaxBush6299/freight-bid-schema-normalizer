@@ -5,8 +5,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.40.2.10011",
-      "templateHash": "4579432841700735248"
+      "version": "0.39.26.7824",
+      "templateHash": "2574749367238588560"
     }
   },
   "parameters": {
@@ -47,7 +47,10 @@
       "defaultValue": [
         "input",
         "output",
-        "artifacts"
+        "artifacts",
+        "export",
+        "outbox",
+        "templates"
       ],
       "metadata": {
         "description": "Blob containers to create."
@@ -128,14 +131,14 @@
       "type": "string",
       "defaultValue": "RXO-Document-Normalizer",
       "metadata": {
-        "description": "Foundry agent name for New Foundry invocation."
+        "description": "Foundry agent name used by runtime invocation only. Bicep does not create/manage Foundry agents."
       }
     },
     "foundryAgentVersion": {
       "type": "string",
       "defaultValue": "5",
       "metadata": {
-        "description": "Foundry agent version for New Foundry invocation."
+        "description": "Foundry agent version used by runtime invocation only. Bicep does not create/manage Foundry agents."
       }
     },
     "foundryApiVersion": {
@@ -147,7 +150,7 @@
     },
     "foundryModel": {
       "type": "string",
-      "defaultValue": "gpt-4.1",
+      "defaultValue": "gpt-5.4",
       "metadata": {
         "description": "Foundry model fallback name used by runtime client."
       }
@@ -163,14 +166,14 @@
       "type": "string",
       "defaultValue": "RXO-Notes-PostProcessor",
       "metadata": {
-        "description": "Foundry post-process agent name."
+        "description": "Foundry post-process agent name used by runtime only. Bicep does not create/manage Foundry agents."
       }
     },
     "foundryPostProcessAgentVersion": {
       "type": "string",
       "defaultValue": "1",
       "metadata": {
-        "description": "Foundry post-process agent version."
+        "description": "Foundry post-process agent version used by runtime only. Bicep does not create/manage Foundry agents."
       }
     },
     "postprocessMode": {
@@ -184,11 +187,33 @@
         "description": "Post-process mode (mock | live)."
       }
     },
+    "rehydratePlannerMode": {
+      "type": "string",
+      "defaultValue": "mock",
+      "allowedValues": [
+        "mock",
+        "live"
+      ],
+      "metadata": {
+        "description": "Rehydrate (reverse pipeline) planner mode."
+      }
+    },
+    "rehydrateFoundryMode": {
+      "type": "string",
+      "defaultValue": "mock",
+      "allowedValues": [
+        "mock",
+        "live"
+      ],
+      "metadata": {
+        "description": "Foundry client mode for the Rehydrate LLM mapping service."
+      }
+    },
     "foundryAssistantId": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Optional preconfigured Foundry assistant ID (left empty for strict New Foundry agent_reference mode)."
+        "description": "Optional preconfigured Foundry assistant ID for runtime fallback. Bicep does not create/manage assistants."
       }
     },
     "enableWebApp": {
@@ -268,6 +293,20 @@
         "description": "Whether to create the Foundry project resource under an existing account."
       }
     },
+    "enableFoundry": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy a dedicated Azure AI Foundry account and project via the foundry module."
+      }
+    },
+    "foundryNewProjectName": {
+      "type": "string",
+      "defaultValue": "proj-rxo",
+      "metadata": {
+        "description": "Foundry project name to create when enableFoundry=true."
+      }
+    },
     "assignFoundryRoles": {
       "type": "bool",
       "defaultValue": false,
@@ -342,7 +381,10 @@
   "variables": {
     "artifactContainerName": "[if(contains(parameters('containerNames'), 'artifacts'), 'artifacts', parameters('containerNames')[0])]",
     "inputContainerName": "[if(contains(parameters('containerNames'), 'input'), 'input', parameters('containerNames')[0])]",
-    "outputContainerName": "[if(contains(parameters('containerNames'), 'output'), 'output', parameters('containerNames')[0])]"
+    "outputContainerName": "[if(contains(parameters('containerNames'), 'output'), 'output', parameters('containerNames')[0])]",
+    "exportContainerName": "[if(contains(parameters('containerNames'), 'export'), 'export', parameters('containerNames')[0])]",
+    "outboxContainerName": "[if(contains(parameters('containerNames'), 'outbox'), 'outbox', parameters('containerNames')[0])]",
+    "templateContainerName": "[if(contains(parameters('containerNames'), 'templates'), 'templates', parameters('containerNames')[0])]"
   },
   "resources": {
     "foundryAccount": {
@@ -405,8 +447,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "11880800855018005879"
+              "version": "0.39.26.7824",
+              "templateHash": "6171998852950260087"
             }
           },
           "parameters": {
@@ -493,7 +535,12 @@
                 "allowBlobPublicAccess": false,
                 "minimumTlsVersion": "TLS1_2",
                 "supportsHttpsTrafficOnly": true,
-                "accessTier": "Hot"
+                "accessTier": "Hot",
+                "publicNetworkAccess": "Enabled",
+                "networkAcls": {
+                  "defaultAction": "Allow",
+                  "bypass": "AzureServices"
+                }
               }
             },
             "blobService": {
@@ -578,6 +625,203 @@
         }
       }
     },
+    "foundry": {
+      "condition": "[parameters('enableFoundry')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "foundry",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "baseName": {
+            "value": "[parameters('baseName')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "projectName": {
+            "value": "[parameters('foundryNewProjectName')]"
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.39.26.7824",
+              "templateHash": "3942426287488029682"
+            }
+          },
+          "parameters": {
+            "baseName": {
+              "type": "string",
+              "metadata": {
+                "description": "Base name used to build resource names."
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Deployment environment name (dev, test, prod)."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for all resources."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Tags applied to created resources."
+              }
+            },
+            "projectName": {
+              "type": "string",
+              "defaultValue": "proj-rxo",
+              "metadata": {
+                "description": "Name of the Foundry project to create under the account."
+              }
+            },
+            "modelName": {
+              "type": "string",
+              "defaultValue": "gpt-5.4",
+              "metadata": {
+                "description": "OpenAI model name to deploy. gpt-5.4 (2026-03-05) is GlobalStandard GA in eastus."
+              }
+            },
+            "modelVersion": {
+              "type": "string",
+              "defaultValue": "2026-03-05",
+              "metadata": {
+                "description": "OpenAI model version to deploy."
+              }
+            },
+            "modelSkuName": {
+              "type": "string",
+              "defaultValue": "GlobalStandard",
+              "allowedValues": [
+                "GlobalStandard",
+                "DataZoneStandard",
+                "Standard",
+                "GlobalProvisioned",
+                "Provisioned"
+              ],
+              "metadata": {
+                "description": "Model deployment SKU. GlobalStandard is the default pay-as-you-go tier."
+              }
+            },
+            "modelCapacity": {
+              "type": "int",
+              "defaultValue": 10,
+              "metadata": {
+                "description": "Tokens-per-minute capacity in thousands (1 = 1 000 TPM)."
+              }
+            }
+          },
+          "variables": {
+            "accountName": "[take(format('ais-{0}', uniqueString(resourceGroup().id, parameters('baseName'), parameters('environmentName'))), 64)]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[variables('accountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "AIServices",
+              "sku": {
+                "name": "S0"
+              },
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "customSubDomainName": "[variables('accountName')]",
+                "publicNetworkAccess": "Enabled",
+                "disableLocalAuth": false,
+                "allowProjectManagement": true
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/projects",
+              "apiVersion": "2025-04-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), parameters('projectName'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {},
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2024-04-01-preview",
+              "name": "[format('{0}/{1}', variables('accountName'), parameters('modelName'))]",
+              "sku": {
+                "name": "[parameters('modelSkuName')]",
+                "capacity": "[parameters('modelCapacity')]"
+              },
+              "properties": {
+                "model": {
+                  "format": "OpenAI",
+                  "name": "[parameters('modelName')]",
+                  "version": "[parameters('modelVersion')]"
+                },
+                "raiPolicyName": "Microsoft.DefaultV2"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "accountName": {
+              "type": "string",
+              "value": "[variables('accountName')]"
+            },
+            "accountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts', variables('accountName'))]"
+            },
+            "accountEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', variables('accountName')), '2025-04-01-preview').endpoint]"
+            },
+            "projectEndpoint": {
+              "type": "string",
+              "value": "[format('{0}api/projects/{1}', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('accountName')), '2025-04-01-preview').endpoint, parameters('projectName'))]"
+            },
+            "projectResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('accountName'), parameters('projectName'))]"
+            },
+            "projectName": {
+              "type": "string",
+              "value": "[parameters('projectName')]"
+            },
+            "modelDeploymentName": {
+              "type": "string",
+              "value": "[parameters('modelName')]"
+            }
+          }
+        }
+      }
+    },
     "monitoring": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -610,8 +854,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "15310139466506393774"
+              "version": "0.39.26.7824",
+              "templateHash": "4199403508407600627"
             }
           },
           "parameters": {
@@ -732,8 +976,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "11040935778792310389"
+              "version": "0.39.26.7824",
+              "templateHash": "11209848241424323020"
             }
           },
           "parameters": {
@@ -771,7 +1015,7 @@
             }
           },
           "variables": {
-            "keyVaultName": "[toLower(take(replace(format('kv-{0}-{1}', parameters('baseName'), parameters('environmentName')), '_', '-'), 24))]"
+            "keyVaultName": "[toLower(take(format('kv-{0}', uniqueString(resourceGroup().id, parameters('baseName'), parameters('environmentName'))), 24))]"
           },
           "resources": [
             {
@@ -848,8 +1092,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "18209024786119451098"
+              "version": "0.39.26.7824",
+              "templateHash": "1691571510599171067"
             }
           },
           "parameters": {
@@ -980,7 +1224,7 @@
             "value": {
               "RUN_MODE": "[parameters('runMode')]",
               "PLANNER_MODE": "[parameters('plannerMode')]",
-              "FOUNDRY_PROJECT_ENDPOINT": "[parameters('foundryProjectEndpoint')]",
+              "FOUNDRY_PROJECT_ENDPOINT": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'projectEndpoint', 'value'), parameters('foundryProjectEndpoint')), parameters('foundryProjectEndpoint'))]",
               "FOUNDRY_AGENT_NAME": "[parameters('foundryAgentName')]",
               "FOUNDRY_AGENT_VERSION": "[parameters('foundryAgentVersion')]",
               "FOUNDRY_API_VERSION": "[parameters('foundryApiVersion')]",
@@ -993,7 +1237,12 @@
               "AZURE_BLOB_API_VERSION": "2021-08-06",
               "ENABLE_LLM_VALIDATION": "false",
               "MAX_SCRIPT_EXECUTION_SECONDS": "45",
-              "MAX_PROFILE_SAMPLE_ROWS": "25"
+              "MAX_PROFILE_SAMPLE_ROWS": "25",
+              "EXPORT_CONTAINER": "[variables('exportContainerName')]",
+              "OUTBOX_CONTAINER": "[variables('outboxContainerName')]",
+              "TEMPLATE_CONTAINER": "[variables('templateContainerName')]",
+              "REHYDRATE_PLANNER_MODE": "[parameters('rehydratePlannerMode')]",
+              "REHYDRATE_FOUNDRY_MODE": "[parameters('rehydrateFoundryMode')]"
             }
           },
           "tags": {
@@ -1006,8 +1255,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "11332641377570059376"
+              "version": "0.39.26.7824",
+              "templateHash": "8810405984617477054"
             }
           },
           "parameters": {
@@ -1127,7 +1376,7 @@
                 }
               }
             ],
-            "functionAppName": "[toLower(take(replace(format('func-{0}-{1}', parameters('baseName'), parameters('environmentName')), '_', '-'), 60))]",
+            "functionAppName": "[toLower(take(format('func-{0}', uniqueString(resourceGroup().id, parameters('baseName'), parameters('environmentName'))), 60))]",
             "baseSettings": [
               {
                 "name": "AzureWebJobsStorage__accountName",
@@ -1222,6 +1471,7 @@
         }
       },
       "dependsOn": [
+        "foundry",
         "functionPlan",
         "keyVault",
         "monitoring",
@@ -1267,8 +1517,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "18209024786119451098"
+              "version": "0.39.26.7824",
+              "templateHash": "1691571510599171067"
             }
           },
           "parameters": {
@@ -1397,8 +1647,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "3945411004850076833"
+              "version": "0.39.26.7824",
+              "templateHash": "17116320289015281729"
             }
           },
           "parameters": {
@@ -1617,8 +1867,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "2901021938555952045"
+              "version": "0.39.26.7824",
+              "templateHash": "9979762402056166742"
             }
           },
           "parameters": {
@@ -1918,10 +2168,10 @@
             "value": "[reference('keyVault').outputs.keyVaultName.value]"
           },
           "grantQueueRole": {
-            "value": "[parameters('createQueues')]"
+            "value": true
           },
           "assignFoundryRoles": {
-            "value": "[parameters('assignFoundryRoles')]"
+            "value": "[or(parameters('assignFoundryRoles'), parameters('enableFoundry'))]"
           },
           "assignWorkerRoles": {
             "value": "[parameters('assignContainerWorkerRoles')]"
@@ -1933,20 +2183,16 @@
             "value": "[parameters('enableWebApp')]"
           },
           "assignWebAppFoundryRoles": {
-            "value": "[and(parameters('enableWebApp'), parameters('assignFoundryRoles'))]"
+            "value": "[and(parameters('enableWebApp'), or(parameters('assignFoundryRoles'), parameters('enableFoundry')))]"
           },
           "assignStreamlitAppRoles": {
             "value": "[parameters('enableStreamlitContainerApp')]"
           },
           "assignStreamlitAppFoundryRoles": {
-            "value": "[and(parameters('enableStreamlitContainerApp'), parameters('assignFoundryRoles'))]"
+            "value": "[and(parameters('enableStreamlitContainerApp'), or(parameters('assignFoundryRoles'), parameters('enableFoundry')))]"
           },
-          "foundryAccountName": {
-            "value": "[parameters('foundryAccountName')]"
-          },
-          "foundryProjectName": {
-            "value": "[parameters('foundryProjectName')]"
-          }
+          "foundryAccountName": "[if(parameters('enableFoundry'), createObject('value', reference('foundry').outputs.accountName.value), createObject('value', parameters('foundryAccountName')))]",
+          "foundryProjectName": "[if(parameters('enableFoundry'), createObject('value', reference('foundry').outputs.projectName.value), createObject('value', parameters('foundryProjectName')))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -1954,8 +2200,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "9875514364806719135"
+              "version": "0.39.26.7824",
+              "templateHash": "7744388706041481176"
             }
           },
           "parameters": {
@@ -2073,6 +2319,7 @@
             "storageBlobDataOwnerRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')]",
             "storageBlobDataContributorRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')]",
             "storageQueueDataContributorRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')]",
+            "eventGridEventSubscriptionContributorRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '428e0ff0-5e57-4d9c-a221-2c70d0e0a443')]",
             "keyVaultSecretsUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
             "openAiUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]",
             "azureAiUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')]",
@@ -2088,7 +2335,7 @@
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), variables('storageBlobDataOwnerRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageBlobDataOwnerRoleId')]",
@@ -2100,7 +2347,7 @@
               "condition": "[parameters('grantQueueRole')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), variables('storageQueueDataContributorRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageQueueDataContributorRoleId')]",
@@ -2111,7 +2358,18 @@
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('principalId'), variables('eventGridEventSubscriptionContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('eventGridEventSubscriptionContributorRoleId')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[format('Microsoft.KeyVault/vaults/{0}', parameters('keyVaultName'))]",
               "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('principalId'), variables('keyVaultSecretsUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('keyVaultSecretsUserRoleId')]",
@@ -2123,7 +2381,7 @@
               "condition": "[and(parameters('assignFoundryRoles'), not(empty(parameters('foundryAccountName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('foundryAccountName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('principalId'), variables('openAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('openAiUserRoleId')]",
@@ -2135,7 +2393,7 @@
               "condition": "[and(and(parameters('assignFoundryRoles'), not(empty(parameters('foundryAccountName')))), not(empty(parameters('foundryProjectName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), parameters('principalId'), variables('azureAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('azureAiUserRoleId')]",
@@ -2147,7 +2405,7 @@
               "condition": "[variables('shouldAssignWorkerRoles')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('workerPrincipalId'), variables('storageBlobDataContributorRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageBlobDataContributorRoleId')]",
@@ -2159,7 +2417,7 @@
               "condition": "[and(variables('shouldAssignWorkerRoles'), parameters('grantQueueRole'))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('workerPrincipalId'), variables('storageQueueDataContributorRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageQueueDataContributorRoleId')]",
@@ -2171,7 +2429,7 @@
               "condition": "[variables('shouldAssignWorkerRoles')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "scope": "[format('Microsoft.KeyVault/vaults/{0}', parameters('keyVaultName'))]",
               "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), parameters('workerPrincipalId'), variables('keyVaultSecretsUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('keyVaultSecretsUserRoleId')]",
@@ -2183,7 +2441,7 @@
               "condition": "[and(variables('shouldAssignWorkerFoundryRoles'), not(empty(parameters('foundryAccountName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('foundryAccountName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('workerPrincipalId'), variables('openAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('openAiUserRoleId')]",
@@ -2195,7 +2453,7 @@
               "condition": "[and(and(variables('shouldAssignWorkerFoundryRoles'), not(empty(parameters('foundryAccountName')))), not(empty(parameters('foundryProjectName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), parameters('workerPrincipalId'), variables('azureAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('azureAiUserRoleId')]",
@@ -2207,7 +2465,7 @@
               "condition": "[variables('shouldAssignWebAppRoles')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('webAppPrincipalId'), variables('storageBlobDataReaderRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageBlobDataReaderRoleId')]",
@@ -2219,7 +2477,7 @@
               "condition": "[and(variables('shouldAssignWebAppFoundryRoles'), not(empty(parameters('foundryAccountName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('foundryAccountName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('webAppPrincipalId'), variables('openAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('openAiUserRoleId')]",
@@ -2231,7 +2489,7 @@
               "condition": "[and(and(variables('shouldAssignWebAppFoundryRoles'), not(empty(parameters('foundryAccountName')))), not(empty(parameters('foundryProjectName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), parameters('webAppPrincipalId'), variables('azureAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('azureAiUserRoleId')]",
@@ -2243,7 +2501,7 @@
               "condition": "[variables('shouldAssignStreamlitAppRoles')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "scope": "[format('Microsoft.Storage/storageAccounts/{0}', parameters('storageAccountName'))]",
               "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('streamlitAppPrincipalId'), variables('storageBlobDataContributorRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('storageBlobDataContributorRoleId')]",
@@ -2255,7 +2513,7 @@
               "condition": "[and(variables('shouldAssignStreamlitAppFoundryRoles'), not(empty(parameters('foundryAccountName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('foundryAccountName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('foundryAccountName')), parameters('streamlitAppPrincipalId'), variables('openAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('openAiUserRoleId')]",
@@ -2267,7 +2525,7 @@
               "condition": "[and(and(variables('shouldAssignStreamlitAppFoundryRoles'), not(empty(parameters('foundryAccountName')))), not(empty(parameters('foundryProjectName'))))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}/projects/{1}', parameters('foundryAccountName'), parameters('foundryProjectName'))]",
               "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), parameters('streamlitAppPrincipalId'), variables('azureAiUserRoleId'))]",
               "properties": {
                 "roleDefinitionId": "[variables('azureAiUserRoleId')]",
@@ -2286,6 +2544,7 @@
       },
       "dependsOn": [
         "containerWorker",
+        "foundry",
         "functionApp",
         "keyVault",
         "storage",
@@ -2340,8 +2599,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.40.2.10011",
-              "templateHash": "9857952197723410553"
+              "version": "0.39.26.7824",
+              "templateHash": "4224566828630073578"
             }
           },
           "parameters": {
@@ -2546,6 +2805,14 @@
     "foundryProjectResourceId": {
       "type": "string",
       "value": "[if(parameters('createFoundryProject'), resourceId('Microsoft.CognitiveServices/accounts/projects', parameters('foundryAccountName'), parameters('foundryProjectName')), '')]"
+    },
+    "foundryAccountName": {
+      "type": "string",
+      "value": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'accountName', 'value'), parameters('foundryAccountName')), parameters('foundryAccountName'))]"
+    },
+    "foundryProjectEndpoint": {
+      "type": "string",
+      "value": "[if(parameters('enableFoundry'), coalesce(tryGet(if(parameters('enableFoundry'), reference('foundry'), null()), 'outputs', 'projectEndpoint', 'value'), parameters('foundryProjectEndpoint')), parameters('foundryProjectEndpoint'))]"
     },
     "containerWorkerJobResourceId": {
       "type": "string",

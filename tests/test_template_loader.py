@@ -15,8 +15,9 @@ class TestTemplateLoader(unittest.TestCase):
         )
 
         self.assertEqual(schema.schema_name, "freight_bid_v1")
-        self.assertEqual(len(schema.columns), 40)
+        self.assertEqual(len(schema.columns), 41)
         self.assertEqual(schema.columns[0].name, "Customer Lane ID")
+        self.assertEqual(schema.columns[-1].name, "Notes JSON")
 
     def test_load_canonical_schema_raises_for_invalid_template(self) -> None:
         invalid_payload = {

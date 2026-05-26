@@ -24,6 +24,7 @@ from .script_policy import evaluate_script_policy
 from .template_loader import load_canonical_schema
 from .validation_service import validate_canonical_records
 from .workbook_profiler import profile_workbook
+from .xls_converter import ensure_xlsx
 
 
 def _extract_records_from_sandbox_result(result: Any) -> list[dict[str, Any]]:
@@ -53,7 +54,10 @@ def _extract_notes_from_sandbox_result(result: Any) -> list[dict[str, Any]]:
 
 
 def _collect_note_field_candidates(profile: Any) -> list[dict[str, Any]]:
-    note_pattern = re.compile(r"\b(note|notes|comment|comments|remark|remarks|instruction|instructions)\b", re.IGNORECASE)
+    note_pattern = re.compile(
+        r"\b(note|notes|comment|comments|remark|remarks|instruction|instructions)\b",
+        re.IGNORECASE,
+    )
     candidates: list[dict[str, Any]] = []
 
     for sheet in getattr(profile, "sheets", []):
@@ -88,7 +92,10 @@ def _build_planning_constraints(schema: Any, profile: Any) -> dict[str, Any]:
         "canonical_note_fields": canonical_note_fields,
         "note_field_preservation": {
             "enabled": bool(note_field_candidates),
-            "instruction": "If note-like source columns exist, map them to canonical note fields and preserve original text content exactly.",
+            "instruction": (
+                "If note-like source columns exist, map them to canonical note "
+                "fields and preserve original text content exactly."
+            ),
         },
     }
 
@@ -100,8 +107,15 @@ def run_pipeline(
     planner_mode: str | None = None,
 ) -> dict[str, Any]:
     input_workbook_path = str(Path(input_workbook).resolve())
+
+    # TD-001: pre-convert .xls to .xlsx so openpyxl can process it
+    _converted_path, _did_convert = ensure_xlsx(input_workbook_path)
+    if _did_convert:
+        input_workbook_path = str(_converted_path)
+
     schema = load_canonical_schema("src/function_app/templates/canonical_schema.freight_bid_v1.json")
-    profile = profile_workbook(input_workbook_path)
+    # Skip formula detection for xls-converted files (xlrd strips formulas to values)
+    profile = profile_workbook(input_workbook_path, detect_formulas=not _did_convert)
     planning_constraints = _build_planning_constraints(schema, profile)
     schema_fingerprint = compute_schema_fingerprint(profile)
     selected_planner_mode = (planner_mode or os.getenv("PLANNER_MODE", "mock")).strip().lower()
@@ -163,6 +177,12 @@ def run_pipeline(
     user_prompt_path = artifact_store.write_text("planner_user_prompt.txt", user_prompt)
     planner_response_path = artifact_store.write_text("planner_response.json", plan.model_dump_json(indent=2))
     profile_path = artifact_store.write_text("workbook_profile.json", profile.model_dump_json(indent=2))
+    # TD-003: emit lane provenance artifact when Coupa <<define>> rows were found
+    if profile.lane_provenance:
+        artifact_store.write_json(
+            "lane_provenance.json",
+            [entry.model_dump() for entry in profile.lane_provenance],
+        )
     note_field_detection_path = artifact_store.write_json("note_field_detection.json", planning_constraints)
     schema_cache_lookup_payload = {
         "schema_fingerprint_sha256": schema_fingerprint_hash,

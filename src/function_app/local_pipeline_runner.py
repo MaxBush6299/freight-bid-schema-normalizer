@@ -31,7 +31,10 @@ def main() -> None:
     _load_local_settings_env()
 
     parser = argparse.ArgumentParser(
-        description="Run the full core normalization pipeline locally (planner -> policy -> sandbox -> canonical output)."
+        description=(
+            "Run the full core normalization pipeline locally "
+            "(planner -> policy -> sandbox -> canonical output)."
+        )
     )
     parser.add_argument(
         "--input",

@@ -46,7 +46,7 @@ param additionalAppSettings object = {}
 @description('Tags applied to the Function App.')
 param tags object = {}
 
-var functionAppName = toLower(take(replace('func-${baseName}-${environmentName}', '_', '-'), 60))
+var functionAppName = toLower(take('func-${uniqueString(resourceGroup().id, baseName, environmentName)}', 60))
 var baseSettings = [
   {
     name: 'AzureWebJobsStorage__accountName'

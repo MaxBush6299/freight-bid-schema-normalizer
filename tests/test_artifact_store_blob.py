@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-from pathlib import Path
 
 from src.function_app.services.artifact_store import (
     BlobArtifactStore,

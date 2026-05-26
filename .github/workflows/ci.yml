@@ -2,9 +2,9 @@ name: CI – Lint, Test & Validate Bicep
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master, main]
   push:
-    branches: [main]
+    branches: [master, main, "feature/**"]
 
 permissions:
   contents: read
@@ -35,7 +35,6 @@ jobs:
 
       - name: Run unit tests
         run: pytest tests/ -v --tb=short
-        continue-on-error: true
 
   validate-bicep:
     name: Validate Bicep IaC

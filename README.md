@@ -39,7 +39,7 @@ This repository implements an AI-driven Excel schema standardization platform fo
 1. Review ./docs/software_spec.md and ./docs/implementation_plan.md
 2. Set up a Python virtual environment
 3. Install dependencies: `pip install -r requirements.txt`
-4. Run tests: `python -m unittest tests/test_artifact_store.py tests/test_sandbox_executor.py tests/test_script_policy.py tests/test_pipeline_runner.py tests/test_planning_service.py tests/test_template_loader.py tests/test_normalization_service.py tests/test_validation_service.py tests/test_output_writer.py tests/test_sheet_classifier.py tests/test_workbook_profiler.py`
+4. Run tests: `python -m pytest tests/`
 
 ## Local Service Restart
 
@@ -95,7 +95,38 @@ This repository implements an AI-driven Excel schema standardization platform fo
   - Browse prior runs discovered from local artifact roots
   - Launch new runs from `examples/inputs/*.xlsx`
   - Submit blob-trigger runs against Azure Blob Storage containers
+  - Run the **Rehydrate Submission** reverse pipeline (Direct or HTTP target)
   - Visualize canonical output table, planner payload/script, validation issues, and sandbox execution logs
+
+## Reverse Pipeline (Rehydrate)
+
+Fills the customer's original bid template back in with priced lanes
+from an `RXO LaneExport` file.  Outputs a `submission.xlsx` plus a
+template-diff report proving only writable cells changed.
+
+- Local runner command:
+  - `python -m src.function_app.local_rehydrate_runner --template "source_docs/Original Customer File 1.xlsx" --export "source_docs/RXO LaneExport.xlsx" --output-root "artifacts/local_rehydrate"`
+- Planner mode flag: `--planner-mode mock|live` (live calls Foundry)
+- Human-in-the-loop for low-confidence mappings: `--interactive --confidence-threshold 0.70`
+- Artifacts produced per run (under `<output-root>/<run_id>/`):
+  - `submission.xlsx` — original template with pricing filled in
+  - `template_profile.json` — bid-sheet slot detection + writable column map
+  - `mapping_plan.json` — planner-produced field→cell mapping plan
+  - `write_report.json` — per-cell write log + no-bid lane list
+  - `pending_review.json` — low-confidence mappings awaiting sign-off
+  - `template_diff.json` — pass/fail diff proving only writable cells changed
+- Streamlit access: launch the app and choose the **Rehydrate Submission** sidebar mode
+- Function App endpoints exposed for cloud / Function-host integration:
+  - `POST /api/rehydrate` (HTTP) — body `{export_blob, template_blob, planner_mode}`
+  - Event-grid blob trigger `RehydrateSubmissionBlob` on the `%EXPORT_CONTAINER%` container
+  - `GET /api/rehydrate/{run_id}?file=<artifact>` — fetch a run artifact from outbox
+- Required environment variables (in `local.settings.json` Values or your environment):
+  - `EXPORT_CONTAINER` (default `export`) — priced export uploads land here
+  - `TEMPLATE_CONTAINER` (default `templates`) — customer templates land here
+  - `OUTBOX_CONTAINER` (default `outbox`) — artifacts are published here
+  - `REHYDRATE_PLANNER_MODE` (`mock`|`live`, default `live`)
+  - `REHYDRATE_CONFIDENCE_THRESHOLD` (default `0.70`)
+  - `REHYDRATE_FUNCTION_URL` (Streamlit HTTP target; default `http://localhost:7071/api/rehydrate`)
 
 ## Blob Trigger Function App Entry
 

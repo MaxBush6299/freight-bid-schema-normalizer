@@ -25,8 +25,9 @@ class TestOutputWriter(unittest.TestCase):
         columns = get_canonical_columns(self.schema)
         self.assertEqual(columns[0], "Customer Lane ID")
         self.assertEqual(columns[1], "FO Code")
-        self.assertEqual(columns[-1], "Strategic Quantile")
-        self.assertEqual(len(columns), 40)
+        self.assertEqual(columns[-2], "Strategic Quantile")
+        self.assertEqual(columns[-1], "Notes JSON")
+        self.assertEqual(len(columns), 41)
 
     def test_normalize_records_fills_missing_columns(self) -> None:
         input_records = [
