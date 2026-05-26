@@ -19,7 +19,6 @@ from src.function_app.services.xls_converter import (
     is_xls,
 )
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _xlrd_available() -> bool:
