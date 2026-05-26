@@ -23,6 +23,7 @@ from treating it as a test module.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from openpyxl import Workbook
 
@@ -57,9 +58,30 @@ def build_template_workbook(
     *,
     route_names: list[str] | None = None,
     include_validation_info: bool = True,
+    prefill_descriptors: bool = False,
+    prefill_bid_inputs: bool = False,
+    descriptor_overrides: dict[str, dict[int, Any]] | None = None,
 ) -> Path:
-    """Write a minimal Coupa-style bid template to ``path`` and return it."""
+    """Write a minimal Coupa-style bid template to ``path`` and return it.
+
+    Parameters
+    ----------
+    prefill_descriptors:
+        When True, the writable descriptor columns (``Origin City`` /
+        ``Origin State``) on each data row are pre-populated with values that
+        mirror the matching export row produced by ``build_export_workbook``.
+        Used by the preservation tests to verify the resolver/writer leave
+        customer-provided descriptors untouched.
+    prefill_bid_inputs:
+        When True, the slot-0 ``Currency`` cell is pre-populated. Used to
+        verify the resolver/writer also preserve pre-filled bid inputs.
+    descriptor_overrides:
+        Optional ``{route_name: {col_index: value}}`` map that overrides any
+        descriptor cell after the defaults. Used by the descriptor-mismatch
+        tests to plant a value that disagrees with the export row.
+    """
     routes = list(route_names) if route_names is not None else list(ROUTE_NAMES)
+    descriptor_overrides = descriptor_overrides or {}
 
     wb = Workbook()
     bid_sheet = wb.active
@@ -96,12 +118,21 @@ def build_template_workbook(
         row = FIRST_DATA_ROW + offset
         bid_sheet.cell(row=row, column=3).value = "<<define>>"
         bid_sheet.cell(row=row, column=4).value = route_name
-        bid_sheet.cell(row=row, column=5).value = "OriginCity"
-        bid_sheet.cell(row=row, column=6).value = "ST"
+        if prefill_descriptors:
+            # Mirror the values build_export_workbook plants on the matching
+            # export row so descriptor cross-validation passes by default.
+            bid_sheet.cell(row=row, column=5).value = "OriginCity"
+            bid_sheet.cell(row=row, column=6).value = "ST"
         # Slot-0 (primary bid) currency is left blank so the reverse writer can
         # populate it; slot-1 currency is pre-set so we can confirm it is not
         # mutated by writes targeted only at slot 0.
+        if prefill_bid_inputs:
+            bid_sheet.cell(row=row, column=8).value = "EUR"  # slot 0 currency pre-filled
         bid_sheet.cell(row=row, column=13).value = "CAD"
+
+        # Per-row descriptor overrides for the mismatch tests
+        for col_idx, value in descriptor_overrides.get(route_name, {}).items():
+            bid_sheet.cell(row=row, column=col_idx).value = value
 
     # 4) Optional validationInfo dropdown sheet (TD-007)
     if include_validation_info:
@@ -122,12 +153,23 @@ def build_export_workbook(
     *,
     route_names: list[str] | None = None,
     extra_route_without_template_match: str | None = None,
+    duplicate_first_route: bool = False,
+    include_descriptors: bool = False,
 ) -> Path:
     """Write a synthetic priced-export workbook compatible with the mock plan.
 
     The mock ReversePlanner expects these source headers:
     ``Origin Note`` (join key — Route Name), ``RXO All In Customer Rate``,
     ``MX Cost``, ``Equipment Type Detail``, ``Customer FSC Type``, ``Currency``.
+
+    Parameters
+    ----------
+    duplicate_first_route:
+        When True, repeats the first route's ``Origin Note`` value on an extra
+        row so the resolver can exercise duplicate-route detection.
+    include_descriptors:
+        When True, adds ``Origin City`` / ``Origin State`` columns that mirror
+        the template descriptors so per-row validation has a comparable pair.
     """
     routes = list(route_names) if route_names is not None else list(ROUTE_NAMES)
 
@@ -143,6 +185,8 @@ def build_export_workbook(
         "Customer FSC Type",
         "Currency",
     ]
+    if include_descriptors:
+        headers.extend(["Origin City", "Origin State"])
     for col_idx, header in enumerate(headers, start=1):
         ws.cell(row=1, column=col_idx).value = header
 
@@ -153,11 +197,23 @@ def build_export_workbook(
         ws.cell(row=row_offset, column=4).value = "V53DV"
         ws.cell(row=row_offset, column=5).value = "Diesel"
         ws.cell(row=row_offset, column=6).value = "USD"
+        if include_descriptors:
+            ws.cell(row=row_offset, column=7).value = "OriginCity"
+            ws.cell(row=row_offset, column=8).value = "ST"
 
     if extra_route_without_template_match:
         extra_row = len(routes) + 2
         ws.cell(row=extra_row, column=1).value = extra_route_without_template_match
         ws.cell(row=extra_row, column=2).value = 9999.0
+
+    if duplicate_first_route and routes:
+        dup_row = ws.max_row + 1
+        ws.cell(row=dup_row, column=1).value = routes[0]
+        ws.cell(row=dup_row, column=2).value = 7777.0
+        ws.cell(row=dup_row, column=3).value = 0.0
+        ws.cell(row=dup_row, column=4).value = "V53DV"
+        ws.cell(row=dup_row, column=5).value = "Diesel"
+        ws.cell(row=dup_row, column=6).value = "USD"
 
     wb.save(str(path))
     return path

@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,12 @@ from .services.template_profiler import TemplateProfiler
 from .services.xls_converter import ensure_xlsx
 
 logger = logging.getLogger(__name__)
+
+# P2-004: confidence at/above this score → mapping is eligible to write
+# automatically. Lower-confidence mappings flow to pending_review but produce
+# no writes unless explicitly approved by a human reviewer.
+_DEFAULT_AUTO_WRITE_THRESHOLD = 0.85
+_AUTO_WRITE_THRESHOLD_ENV = "REHYDRATE_MIN_WRITE_CONFIDENCE"
 
 
 def _load_export_rows(export_path: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -144,6 +151,26 @@ def _interactive_review(
     return mappings
 
 
+def _resolve_auto_write_threshold(explicit: float | None) -> float:
+    """Resolve the auto-write threshold from (in priority order):
+    explicit argument → ``REHYDRATE_MIN_WRITE_CONFIDENCE`` env var → default."""
+    if explicit is not None:
+        return float(explicit)
+    raw = os.getenv(_AUTO_WRITE_THRESHOLD_ENV)
+    if raw is None or raw.strip() == "":
+        return _DEFAULT_AUTO_WRITE_THRESHOLD
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; falling back to default %.2f",
+            _AUTO_WRITE_THRESHOLD_ENV,
+            raw,
+            _DEFAULT_AUTO_WRITE_THRESHOLD,
+        )
+        return _DEFAULT_AUTO_WRITE_THRESHOLD
+
+
 def run_rehydrate(
     template_path: str,
     export_path: str,
@@ -151,10 +178,13 @@ def run_rehydrate(
     planner_mode: str = "mock",
     confidence_threshold: float = 0.70,
     interactive: bool = False,
+    auto_write_threshold: float | None = None,
 ) -> dict[str, Any]:
     run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
     run_dir = Path(output_root) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    auto_write_threshold_resolved = _resolve_auto_write_threshold(auto_write_threshold)
 
     # 1. Convert template .xls → .xlsx if needed
     template_xlsx, _did_convert = ensure_xlsx(template_path)
@@ -174,8 +204,19 @@ def run_rehydrate(
     if interactive and plan.pending_review:
         plan.mappings = _interactive_review(plan.pending_review, plan.mappings)
 
-    # 6. Resolve CellWriteInstructions
-    instructions, no_bid_lanes = resolve_instructions(export_rows, template_profile, plan)
+    # 6. Resolve CellWriteInstructions (gates by confidence + preserves filled cells +
+    #    validates row descriptors). Mock plans bypass the confidence gate because
+    #    mock mappings carry confidence 1.0 by construction.
+    resolution = resolve_instructions(
+        export_rows,
+        template_profile,
+        plan,
+        template_path=str(template_xlsx),
+        auto_write_threshold=auto_write_threshold_resolved,
+        validate_descriptors=True,
+    )
+    instructions = resolution.instructions
+    no_bid_lanes = resolution.no_bid_lanes
 
     # 7. Write submission
     submission_path = str(run_dir / "submission.xlsx")
@@ -187,6 +228,12 @@ def run_rehydrate(
         template_profile=template_profile,
     )
     write_report.no_bid_lanes = no_bid_lanes
+    write_report.cells_skipped_preserved_resolver = resolution.cells_skipped_preserved
+    write_report.cells_skipped_low_confidence = resolution.cells_skipped_low_confidence
+    write_report.rows_skipped_descriptor_mismatch = resolution.rows_skipped_descriptor_mismatch
+    write_report.duplicate_export_routes = resolution.duplicate_export_routes
+    # Merge resolver skip log into write_log so the artifact carries one timeline.
+    write_report.write_log.extend(resolution.skip_log)
     write_report.validation_summary = _build_reverse_validation_report(no_bid_lanes, template_profile)
     write_report.warnings = write_report.validation_summary.issues
     for warning in write_report.warnings:
@@ -232,6 +279,14 @@ def run_rehydrate(
         "instructions_resolved": len(instructions),
         "cells_written": write_report.cells_written,
         "cells_skipped": write_report.cells_skipped,
+        "cells_skipped_preserved": (
+            write_report.cells_skipped_preserved
+            + write_report.cells_skipped_preserved_resolver
+        ),
+        "cells_skipped_low_confidence": write_report.cells_skipped_low_confidence,
+        "rows_skipped_descriptor_mismatch": write_report.rows_skipped_descriptor_mismatch,
+        "duplicate_export_routes": write_report.duplicate_export_routes,
+        "auto_write_threshold": auto_write_threshold_resolved,
         "no_bid_lanes": len(no_bid_lanes),
         "no_bid_lane_names": no_bid_lanes,
         "validation_warnings": (
@@ -286,6 +341,15 @@ def main() -> None:
         help="Confidence score below which a mapping is flagged for review (default 0.70).",
     )
     parser.add_argument(
+        "--auto-write-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Mappings with confidence below this score are NOT auto-written "
+            "(falls back to $REHYDRATE_MIN_WRITE_CONFIDENCE, then 0.85)."
+        ),
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         default=False,
@@ -300,6 +364,7 @@ def main() -> None:
         planner_mode=args.planner_mode,
         confidence_threshold=args.confidence_threshold,
         interactive=args.interactive,
+        auto_write_threshold=args.auto_write_threshold,
     )
     print(json.dumps(result, indent=2))
 

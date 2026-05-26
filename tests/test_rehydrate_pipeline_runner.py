@@ -165,6 +165,49 @@ class TestRehydratePipelineRunner(unittest.TestCase):
         self.assertEqual(plan_doc["iterations_run"], 0)
         self.assertGreater(len(plan_doc["mappings"]), 0)
 
+    def test_pipeline_preserves_pre_filled_bid_inputs(self) -> None:
+        """If a customer has already filled in slot-0 Currency on the template,
+        the pipeline must NOT overwrite that value (this is the regression test
+        for the 180-cell overwrite bug observed against the real workbook)."""
+        template = build_template_workbook(
+            self.tmp / "template.xlsx",
+            prefill_descriptors=True,
+            prefill_bid_inputs=True,  # slot-0 Currency = "EUR"
+        )
+        export = build_export_workbook(self.tmp / "export.xlsx")
+
+        result = run_rehydrate(
+            template_path=str(template),
+            export_path=str(export),
+            output_root=str(self.tmp / "out"),
+            planner_mode="mock",
+            # default auto_write_threshold=0.85; mock confidence=1.0 → eligible
+        )
+
+        # 3 mappings × 3 routes = 9 candidate writes.  3 of them (Currency)
+        # target a pre-filled cell and must be preserved.
+        self.assertEqual(result["instructions_resolved"], 6)
+        self.assertEqual(result["cells_written"], 6)
+        self.assertEqual(result["cells_skipped_preserved"], 3)
+        self.assertTrue(result["diff_passed"])
+
+        # And the on-disk submission must still carry "EUR" in every slot-0
+        # Currency cell, not the export's "USD".
+        wb = load_workbook(result["submission"])
+        try:
+            sheet = wb[BID_SHEET_NAME]
+            for row_offset in range(len(ROUTE_NAMES)):
+                currency_val = sheet.cell(
+                    row=FIRST_DATA_ROW + row_offset,
+                    column=8,  # slot 0 Currency in the fixture
+                ).value
+                self.assertEqual(
+                    currency_val, "EUR",
+                    f"row {row_offset}: pre-filled currency was overwritten",
+                )
+        finally:
+            wb.close()
+
 
 if __name__ == "__main__":
     unittest.main()

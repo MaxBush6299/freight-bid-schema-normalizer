@@ -105,14 +105,18 @@ from an `RXO LaneExport` file.  Outputs a `submission.xlsx` plus a
 template-diff report proving only writable cells changed.
 
 - Local runner command:
-  - `python -m src.function_app.local_rehydrate_runner --template "source_docs/Original Customer File 1.xlsx" --export "source_docs/RXO LaneExport.xlsx" --output-root "artifacts/local_rehydrate"`
+  - `python -m src.function_app.local_rehydrate_runner --template "examples/inputs/Original Customer File 1.xlsx" --export "examples/inputs/FTL LaneExport.xlsx" --output-root "artifacts/local_rehydrate"`
 - Planner mode flag: `--planner-mode mock|live` (live calls Foundry)
 - Human-in-the-loop for low-confidence mappings: `--interactive --confidence-threshold 0.70`
+- Auto-write confidence gate: `--auto-write-threshold 0.85` (default; only mappings at/above this confidence are written automatically — others are deferred to `pending_review.json` even if `--interactive` is off)
+- Customer-data preservation (always on): the resolver and the writer both refuse to overwrite any cell that already has a value. Pre-filled bid inputs, descriptors, notes, etc. are reported in `write_report.json` as `skipped_preserved` instead of being clobbered.
+- Per-row descriptor validation (always on when the template has Origin/Destination City/State/ZIP filled in): a row is skipped entirely if its template descriptors disagree with the matched export row.
+- Ambiguous-route detection: duplicate `Origin Note` values in the export are listed in `write_report.duplicate_export_routes` and never written to.
 - Artifacts produced per run (under `<output-root>/<run_id>/`):
   - `submission.xlsx` — original template with pricing filled in
   - `template_profile.json` — bid-sheet slot detection + writable column map
   - `mapping_plan.json` — planner-produced field→cell mapping plan
-  - `write_report.json` — per-cell write log + no-bid lane list
+  - `write_report.json` — per-cell write log + skip log + counters (`cells_skipped_preserved`, `cells_skipped_low_confidence`, `rows_skipped_descriptor_mismatch`, `duplicate_export_routes`)
   - `pending_review.json` — low-confidence mappings awaiting sign-off
   - `template_diff.json` — pass/fail diff proving only writable cells changed
 - Streamlit access: launch the app and choose the **Rehydrate Submission** sidebar mode
@@ -125,7 +129,8 @@ template-diff report proving only writable cells changed.
   - `TEMPLATE_CONTAINER` (default `templates`) — customer templates land here
   - `OUTBOX_CONTAINER` (default `outbox`) — artifacts are published here
   - `REHYDRATE_PLANNER_MODE` (`mock`|`live`, default `live`)
-  - `REHYDRATE_CONFIDENCE_THRESHOLD` (default `0.70`)
+  - `REHYDRATE_CONFIDENCE_THRESHOLD` (default `0.70`) — review threshold; mappings below this are flagged in `pending_review.json`
+  - `REHYDRATE_MIN_WRITE_CONFIDENCE` (default `0.85`) — auto-write threshold; mappings below this are NOT written automatically (CLI override: `--auto-write-threshold`)
   - `REHYDRATE_FUNCTION_URL` (Streamlit HTTP target; default `http://localhost:7071/api/rehydrate`)
 
 ## Blob Trigger Function App Entry
