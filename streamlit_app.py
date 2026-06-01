@@ -12,8 +12,18 @@ import streamlit as st
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
-from src.function_app.local_rehydrate_runner import run_rehydrate
+from src.function_app.local_rehydrate_runner import (
+    PreparedPlan,
+    apply_plan,
+    prepare_plan,
+)
+from src.function_app.models.contracts import (
+    FieldMapping,
+    HumanReviewRequest,
+    ReverseMappingPlan,
+)
 from src.function_app.services.foundry_agent_client import FoundryAgentClient
+from src.function_app.services.freight_semantics_validator import validate_mappings
 from src.function_app.services.pipeline_runner import run_pipeline
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
@@ -1220,10 +1230,7 @@ def _create_rehydrate_run() -> dict[str, Any] | None:
                 + "."
             )
 
-    # ── Run button ────────────────────────────────────────────────
-    if not st.button("Run Rehydrate", type="primary", key="rehydrate_run_button"):
-        return None
-
+    # ── Run / Wizard ──────────────────────────────────────────────
     if template_path == export_path:
         st.error("Cannot run — template and export point to the same file.")
         return None
@@ -1232,12 +1239,20 @@ def _create_rehydrate_run() -> dict[str, Any] | None:
         st.stop()
 
     if run_target.startswith("Direct"):
+        # Direct mode is a 3-step wizard (prepare → edit → apply). It is
+        # always rendered so the operator can iterate without re-clicking
+        # an outer "Run" button.
+        st.divider()
         return _run_rehydrate_direct(
             template_path=Path(template_path),
             export_path=Path(export_path),
             planner_mode=planner_mode,
             confidence_threshold=confidence_threshold,
         )
+
+    # HTTP mode is one-shot, so it stays gated behind a Run button.
+    if not st.button("Run Rehydrate", type="primary", key="rehydrate_run_button"):
+        return None
 
     if _validate_rehydrate_blob_configuration():
         st.stop()
@@ -1258,22 +1273,325 @@ def _run_rehydrate_direct(
     planner_mode: str,
     confidence_threshold: float,
 ) -> dict[str, Any] | None:
-    STREAMLIT_REHYDRATE_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    with st.spinner("Running rehydrate pipeline locally..."):
-        try:
-            result = run_rehydrate(
-                template_path=str(template_path),
-                export_path=str(export_path),
-                output_root=str(STREAMLIT_REHYDRATE_OUTPUT_ROOT),
-                planner_mode=planner_mode,
-                confidence_threshold=confidence_threshold,
-            )
-        except Exception as exc:
-            st.error(f"Rehydrate failed: {exc}")
-            return None
+    """Two-step wizard: prepare a mapping plan, let the operator edit it,
+    then apply.
 
-    _render_rehydrate_result(result)
+    Step 1 — clicking *Plan Mapping* runs the planner (or returns a cached
+    approved plan for a template we've seen before) and stashes the result in
+    ``st.session_state``.
+
+    Step 2 — the editor shows one row per (sheet, slot, target column) with a
+    selectbox to pick the export field that should populate it.  Validator
+    warnings are surfaced inline.
+
+    Step 3 — *Approve & Generate Submission* calls ``apply_plan`` with the
+    edited mappings and writes the submission.
+    """
+    STREAMLIT_REHYDRATE_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+    # Session-state key is unique per (template, export) pair so switching
+    # files automatically discards stale state.
+    state_key = _rehydrate_state_key(template_path, export_path)
+
+    # ── Step 1 — Plan Mapping (or use cache) ──────────────────────────
+    plan_col, retrain_col = st.columns([3, 1])
+    with plan_col:
+        plan_clicked = st.button(
+            "Step 1 — Plan Mapping",
+            type="primary",
+            key=f"plan_btn_{state_key}",
+            help=(
+                "Profiles the template, loads the export, and either fetches a "
+                "previously approved mapping for this template from the cache "
+                "or asks the planner for a fresh proposal."
+            ),
+        )
+    with retrain_col:
+        retrain_clicked = st.button(
+            "Re-train (skip cache)",
+            key=f"retrain_btn_{state_key}",
+            help="Discard any cached mapping for this template and re-run the planner.",
+        )
+
+    if plan_clicked or retrain_clicked:
+        use_cache = not retrain_clicked
+        with st.spinner("Planning mapping..."):
+            try:
+                prepared = prepare_plan(
+                    template_path=str(template_path),
+                    export_path=str(export_path),
+                    planner_mode=planner_mode,
+                    confidence_threshold=confidence_threshold,
+                    use_cache=use_cache,
+                )
+            except Exception as exc:
+                st.error(f"Plan failed: {exc}")
+                return None
+        st.session_state[state_key] = {
+            "prepared": prepared,
+            "result": None,
+            "approved_by": _rehydrate_default_approver(),
+        }
+
+    state = st.session_state.get(state_key)
+    if not state:
+        st.info("Click **Step 1 — Plan Mapping** to begin.")
+        return None
+
+    prepared: PreparedPlan = state["prepared"]
+
+    # ── Cache-hit banner ──────────────────────────────────────────────
+    if prepared.cache_hit and prepared.cache_record is not None:
+        approved_at = prepared.cache_record.approved_at.strftime("%Y-%m-%d %H:%M UTC")
+        st.success(
+            f"✓ **Using saved mapping** for this template "
+            f"(approved {approved_at} by `{prepared.cache_record.approved_by}`). "
+            f"Edit below if needed, or click **Re-train** above to discard the cache."
+        )
+    else:
+        st.info(
+            "ℹ Fresh mapping proposed by the planner. **Review each row carefully** "
+            "before approving — verified mappings are cached for future runs."
+        )
+
+    # ── Step 2 — Mapping editor ───────────────────────────────────────
+    st.markdown("#### Step 2 — Review mappings")
+    editor_rows = _build_mapping_editor_rows(prepared)
+    if not editor_rows:
+        st.warning(
+            "No writable template columns were detected — nothing to map. "
+            "Check the template profile artifact for diagnostics."
+        )
+        return None
+
+    edited_df = _render_mapping_editor(editor_rows, prepared, state_key)
+
+    # Materialise the edited mappings back into FieldMapping objects.
+    edited_mappings = _editor_rows_to_field_mappings(edited_df, prepared)
+    # Run the deterministic validator on the EDITED mappings so the operator
+    # sees instant feedback if they pick a bad pair.
+    validation = validate_mappings([m.model_copy(deep=True) for m in edited_mappings])
+    warnings_for_actions = [
+        a for a in validation.actions if a.severity == "warning"
+    ]
+    if warnings_for_actions:
+        st.warning(
+            f"⚠ The validator flagged {len(warnings_for_actions)} mapping(s) — "
+            f"see the **Warning** column above. Approving will gate these "
+            f"out of the write step unless their confidence is raised."
+        )
+
+    # ── Step 3 — Approve & Generate Submission ────────────────────────
+    st.markdown("#### Step 3 — Approve & Generate Submission")
+    approver_default = state.get("approved_by") or _rehydrate_default_approver()
+    approved_by = st.text_input(
+        "Approved by",
+        value=approver_default,
+        key=f"approver_{state_key}",
+        help="Saved with the cached approved plan so future runs show who approved it.",
+    )
+    state["approved_by"] = approved_by
+
+    approve_clicked = st.button(
+        "Approve & Generate Submission",
+        type="primary",
+        key=f"approve_btn_{state_key}",
+    )
+
+    if approve_clicked:
+        # Build a fresh ReverseMappingPlan from the edited mappings.
+        approved_plan = ReverseMappingPlan(
+            plan_id=prepared.plan.plan_id,
+            template_fingerprint=prepared.template_profile.template_fingerprint,
+            planner_mode=prepared.plan.planner_mode,
+            mappings=edited_mappings,
+            assumptions=list(prepared.plan.assumptions)
+            + [f"Operator edited mapping (approved_by={approved_by!r})."],
+            pending_review=[],
+            iterations_run=prepared.plan.iterations_run,
+        )
+        # Re-run validator on the final mappings so demoted ones flow to
+        # pending_review and get gated by the writer.
+        validate_mappings(approved_plan.mappings)
+        approved_plan.pending_review = [
+            HumanReviewRequest(
+                source_field=fm.source_field,
+                target_column=fm.target_column,
+                confidence_score=fm.confidence_score,
+                reasoning=fm.reasoning,
+            )
+            for fm in approved_plan.mappings
+            if fm.needs_review
+        ]
+        with st.spinner("Writing submission..."):
+            try:
+                result = apply_plan(
+                    prepared,
+                    output_root=str(STREAMLIT_REHYDRATE_OUTPUT_ROOT),
+                    approved_plan=approved_plan,
+                    approved_by=approved_by,
+                )
+            except Exception as exc:
+                st.error(f"Apply failed: {exc}")
+                return None
+        state["result"] = result
+
+    result = state.get("result")
+    if result is not None:
+        if result.get("cache_saved"):
+            st.success(
+                f"✓ Submission generated and mapping cached for next run "
+                f"(template fingerprint `{result.get('template_fingerprint', '?')}`)."
+            )
+        else:
+            st.success(
+                "✓ Submission generated (cache hit — no re-save needed)."
+            )
+        _render_rehydrate_result(result)
     return result
+
+
+def _rehydrate_state_key(template_path: Path, export_path: Path) -> str:
+    """Per-(template, export) session-state key so the wizard discards stale
+    state when the operator switches files."""
+    return "rehydrate_wizard__" + "__".join([str(template_path), str(export_path)])
+
+
+def _rehydrate_default_approver() -> str:
+    """Best-effort identifier for the current operator (used as cache metadata)."""
+    return os.environ.get("USER") or os.environ.get("USERNAME") or "streamlit"
+
+
+def _build_mapping_editor_rows(prepared: PreparedPlan) -> list[dict[str, Any]]:
+    """Build one row per (sheet, slot, target column) for the editor.
+
+    The row is pre-populated with the planner/cached suggestion if one
+    exists for that (target_column, bid_slot); otherwise the source defaults
+    to ``"DON'T MAP"``.
+    """
+    # Index existing mappings by (target_column, bid_slot) for fast lookup.
+    by_target: dict[tuple[str, int], FieldMapping] = {}
+    for fm in prepared.plan.mappings:
+        if not fm.target_column:
+            continue
+        by_target.setdefault((fm.target_column, fm.bid_slot), fm)
+
+    rows: list[dict[str, Any]] = []
+    for sheet_profile in prepared.template_profile.bid_sheets:
+        for slot_idx, slot in enumerate(sheet_profile.bid_slots):
+            for target_column in slot.writable_columns:
+                fm = by_target.get((target_column, slot_idx))
+                rows.append({
+                    "Sheet": sheet_profile.sheet_name,
+                    "Slot": slot_idx,
+                    "Target column": target_column,
+                    "Source field": fm.source_field if fm else "DON'T MAP",
+                    "Confidence": round(fm.confidence_score, 2) if fm else 0.0,
+                    "Reasoning": fm.reasoning if fm else "",
+                    "Warning": _warning_for_pair(
+                        fm.source_field if fm else "", target_column
+                    ),
+                })
+    return rows
+
+
+def _warning_for_pair(source_field: str, target_column: str) -> str:
+    """One-shot validator: render the inline warning string for a single
+    (source, target) pair without mutating any state."""
+    if not source_field or source_field == "DON'T MAP" or not target_column:
+        return ""
+    trial = FieldMapping(
+        source_field=source_field,
+        target_column=target_column,
+        confidence_score=1.0,
+    )
+    result = validate_mappings([trial])
+    if not result.actions:
+        return ""
+    bad = [a for a in result.actions if a.severity == "warning"]
+    if not bad:
+        return ""
+    return "⚠ " + bad[0].message
+
+
+def _render_mapping_editor(
+    rows: list[dict[str, Any]],
+    prepared: PreparedPlan,
+    state_key: str,
+) -> pd.DataFrame:
+    """Render the mapping table with selectbox source-field column."""
+    df = pd.DataFrame(rows)
+    source_options = ["DON'T MAP"] + list(dict.fromkeys(prepared.export_columns))
+    column_config = {
+        "Sheet": st.column_config.TextColumn("Sheet", disabled=True, width="small"),
+        "Slot": st.column_config.NumberColumn("Slot", disabled=True, width="small"),
+        "Target column": st.column_config.TextColumn(
+            "Target column", disabled=True, width="medium"
+        ),
+        "Source field": st.column_config.SelectboxColumn(
+            "Source field",
+            options=source_options,
+            required=True,
+            width="medium",
+            help="Export column whose value will be written into this template cell.",
+        ),
+        "Confidence": st.column_config.NumberColumn(
+            "Confidence", disabled=True, format="%.2f", width="small"
+        ),
+        "Reasoning": st.column_config.TextColumn(
+            "Reasoning", disabled=True, width="large"
+        ),
+        "Warning": st.column_config.TextColumn(
+            "Warning", disabled=True, width="medium"
+        ),
+    }
+    return st.data_editor(
+        df,
+        column_config=column_config,
+        hide_index=True,
+        num_rows="fixed",
+        use_container_width=True,
+        key=f"editor_{state_key}",
+    )
+
+
+def _editor_rows_to_field_mappings(
+    df: pd.DataFrame, prepared: PreparedPlan,
+) -> list[FieldMapping]:
+    """Convert the edited editor rows back to FieldMapping objects.
+
+    Rows with source = ``"DON'T MAP"`` are dropped. Confidence is carried
+    over from the original plan when the operator did not change the source
+    field; otherwise it is reset to 1.0 (treated as a human override that
+    bypasses the auto-write confidence gate via ``needs_review=False``).
+    """
+    original_by_key: dict[tuple[str, int], FieldMapping] = {}
+    for fm in prepared.plan.mappings:
+        original_by_key.setdefault((fm.target_column, fm.bid_slot), fm)
+
+    out: list[FieldMapping] = []
+    for _, row in df.iterrows():
+        source = str(row["Source field"]).strip()
+        if not source or source == "DON'T MAP":
+            continue
+        target = str(row["Target column"]).strip()
+        slot = int(row["Slot"])
+        original = original_by_key.get((target, slot))
+        if original is not None and original.source_field == source:
+            # Untouched row — preserve original confidence/reasoning.
+            out.append(original.model_copy(deep=True))
+        else:
+            # Operator picked a different source → treat as approved override.
+            out.append(FieldMapping(
+                source_field=source,
+                target_column=target,
+                bid_slot=slot,
+                value_transform=original.value_transform if original else None,
+                confidence_score=1.0,
+                reasoning="operator override via mapping editor",
+                needs_review=False,
+            ))
+    return out
 
 
 def _run_rehydrate_http(

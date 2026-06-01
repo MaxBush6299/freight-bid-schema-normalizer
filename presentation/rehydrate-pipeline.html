@@ -1,0 +1,1410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RXO Rehydrate Pipeline · Customer Briefing</title>
+<meta name="description" content="How the rehydrate pipeline turns a priced RXO LaneExport plus a blank customer bid template into a finished, audit-ready submission." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@300;400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<style>
+/* ============================================================
+   Tokens
+   ============================================================ */
+:root {
+  /* Parchment + Ink + Vermillion. Committed color strategy. */
+  --paper:           oklch(0.965 0.012 75);
+  --paper-deep:      oklch(0.945 0.014 75);
+  --paper-tint:      oklch(0.92  0.018 75);
+  --ink:             oklch(0.22  0.045 250);
+  --ink-2:           oklch(0.38  0.04  250);
+  --ink-3:           oklch(0.55  0.03  250);
+  --ink-4:           oklch(0.72  0.02  250);
+  --rule:            oklch(0.85  0.015 75);
+  --rule-strong:     oklch(0.78  0.02  75);
+  --vermillion:      oklch(0.62  0.21  35);
+  --vermillion-deep: oklch(0.5   0.2   30);
+  --vermillion-tint: oklch(0.94  0.05  35);
+  --signal-green:    oklch(0.48  0.13  145);
+  --signal-green-tint: oklch(0.95 0.03  145);
+
+  --shadow-soft:  0 1px 0 oklch(0.85 0.015 75), 0 12px 28px -22px oklch(0.4 0.04 250 / 0.35);
+  --shadow-doc:   0 1px 0 oklch(0.84 0.018 75), 0 14px 40px -28px oklch(0.3 0.04 250 / 0.45), 0 2px 6px -2px oklch(0.4 0.04 250 / 0.08);
+
+  --type-display: "Spectral", "Iowan Old Style", Georgia, serif;
+  --type-body:    "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --type-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --measure: 64ch;
+  --gutter-x: clamp(1.25rem, 6vw, 5rem);
+  --section-y: clamp(5rem, 12vh, 9rem);
+  --stack-xs: 0.375rem;
+  --stack-sm: 0.75rem;
+  --stack-md: 1.25rem;
+  --stack-lg: 2rem;
+  --stack-xl: 3.75rem;
+  --stack-2xl: 6rem;
+}
+
+/* ============================================================
+   Reset + base
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: var(--type-body);
+  font-size: clamp(1.0625rem, 0.65rem + 0.45vw, 1.1875rem);
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Faint paper-grain noise. Pure SVG, no asset request. */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.22  0 0 0 0 0.18  0 0 0 0 0.15  0 0 0 0.035 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 180px 180px;
+}
+
+h1, h2, h3, h4 { margin: 0; font-family: var(--type-display); font-weight: 500; letter-spacing: -0.015em; color: var(--ink); }
+p { margin: 0; max-width: var(--measure); }
+a { color: inherit; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
+
+/* ============================================================
+   Layout primitives
+   ============================================================ */
+.page { width: 100%; max-width: 1480px; margin-inline: auto; padding-inline: var(--gutter-x); }
+.section { padding-block: var(--section-y); position: relative; }
+.section + .section { border-top: 1px solid var(--rule); }
+.section--paper-deep { background: var(--paper-deep); }
+.section--paper-tint { background: var(--paper-tint); }
+
+.eyebrow {
+  font-family: var(--type-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  text-transform: lowercase;
+  margin-bottom: var(--stack-md);
+  display: inline-flex; align-items: baseline; gap: 0.6rem;
+}
+.eyebrow::before {
+  content: ""; display: inline-block; width: 24px; height: 1px;
+  background: var(--vermillion); transform: translateY(-0.32em);
+}
+
+.lead { font-size: clamp(1.25rem, 0.8rem + 1vw, 1.6rem); line-height: 1.45; color: var(--ink-2); max-width: 52ch; font-weight: 400; }
+
+.h1 { font-size: clamp(3.4rem, 1rem + 7vw, 7rem); line-height: 1.02; font-weight: 500; letter-spacing: -0.025em; }
+.h2 { font-size: clamp(2.1rem, 1rem + 2.6vw, 3.6rem); line-height: 1.08; font-weight: 500; letter-spacing: -0.022em; }
+.h3 { font-size: clamp(1.35rem, 0.9rem + 0.9vw, 1.75rem); line-height: 1.25; font-weight: 500; letter-spacing: -0.015em; font-family: var(--type-body); }
+.h4 { font-size: 1rem; font-family: var(--type-body); font-weight: 600; letter-spacing: 0.005em; }
+
+/* Soft serif italic ONLY for chapter numbers + intent quotes, never as decorative drop caps. */
+.italic-quiet { font-family: var(--type-display); font-style: italic; font-weight: 300; color: var(--ink-2); }
+
+.mono { font-family: var(--type-mono); font-feature-settings: "zero" 1, "ss01" 1; }
+
+.rule-thin { height: 1px; background: var(--rule); border: 0; margin: 0; }
+.rule-strong { height: 1px; background: var(--rule-strong); border: 0; margin: 0; }
+
+.grid {
+  display: grid;
+  gap: var(--stack-xl);
+}
+.grid-2-7 { grid-template-columns: 1fr; }
+@media (min-width: 920px) { .grid-2-7 { grid-template-columns: minmax(0, 2fr) minmax(0, 7fr); } }
+.grid-5-7 { grid-template-columns: 1fr; }
+@media (min-width: 920px) { .grid-5-7 { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+.grid-half { grid-template-columns: 1fr; }
+@media (min-width: 920px) { .grid-half { grid-template-columns: 1fr 1fr; } }
+
+/* ============================================================
+   Header / navigation rail
+   ============================================================ */
+.topnav {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem var(--gutter-x);
+  background: color-mix(in oklch, var(--paper) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 60%, transparent);
+  font-family: var(--type-mono);
+  font-size: 0.78rem; letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+.topnav__brand { display: inline-flex; align-items: center; gap: 0.7rem; color: var(--ink); }
+.topnav__brand-mark {
+  width: 18px; height: 18px; display: inline-block;
+  background: var(--ink); border-radius: 2px;
+  position: relative;
+}
+.topnav__brand-mark::after {
+  content: ""; position: absolute; right: -4px; bottom: -4px; width: 8px; height: 8px;
+  background: var(--vermillion); border-radius: 1px;
+}
+.topnav__sections { display: none; gap: 1.6rem; }
+@media (min-width: 900px) { .topnav__sections { display: inline-flex; } }
+.topnav__sections a { text-decoration: none; color: var(--ink-2); }
+.topnav__sections a:hover { color: var(--ink); }
+.topnav__meta { color: var(--ink-3); }
+
+/* ============================================================
+   Cover
+   ============================================================ */
+.cover {
+  min-height: calc(100vh - 56px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--stack-xl);
+  padding-block: clamp(3rem, 6vh, 5rem) clamp(2rem, 4vh, 3rem);
+}
+.cover__meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--stack-md);
+  align-items: end;
+}
+@media (min-width: 760px) {
+  .cover__meta { grid-template-columns: 1fr auto; }
+}
+.cover__chapter {
+  font-family: var(--type-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.cover__chapter span { color: var(--vermillion); }
+.cover__date {
+  font-family: var(--type-mono);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  text-align: left;
+}
+@media (min-width: 760px) { .cover__date { text-align: right; } }
+
+.cover__title {
+  display: flex; flex-direction: column; gap: clamp(0.5rem, 2vh, 1.25rem);
+  align-self: center;
+}
+.cover__title h1 {
+  /* Use a deliberately tight set; the vermillion word is the anchor */
+  line-height: 0.96;
+}
+.cover__title h1 .accent { color: var(--vermillion); }
+.cover__intent {
+  font-size: clamp(1.05rem, 0.85rem + 0.6vw, 1.3rem);
+  max-width: 56ch;
+  color: var(--ink-2);
+  margin-top: var(--stack-md);
+}
+.cover__intent strong { color: var(--ink); font-weight: 600; }
+
+.cover__foot {
+  display: grid; grid-template-columns: 1fr;
+  gap: var(--stack-md);
+  padding-top: var(--stack-lg);
+  border-top: 1px solid var(--rule);
+}
+@media (min-width: 760px) {
+  .cover__foot { grid-template-columns: repeat(3, 1fr); }
+}
+.cover__foot dt {
+  font-family: var(--type-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  margin-bottom: 0.3rem;
+}
+.cover__foot dd { margin: 0; font-size: 1rem; color: var(--ink); font-weight: 500; }
+.cover__foot dd span { color: var(--ink-2); font-weight: 400; }
+.cover__scroll {
+  font-family: var(--type-mono);
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  margin-top: var(--stack-md);
+}
+.cover__scroll::before {
+  content: ""; display: inline-block; width: 36px; height: 1px;
+  background: var(--ink-3);
+  animation: scrollHint 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  transform-origin: left center;
+}
+@keyframes scrollHint {
+  0%, 100% { transform: scaleX(0.3); opacity: 0.4; }
+  50%      { transform: scaleX(1);   opacity: 1;   }
+}
+
+/* ============================================================
+   Section heads
+   ============================================================ */
+.sectionhead { display: grid; gap: var(--stack-md); margin-bottom: var(--stack-xl); }
+.sectionhead__count {
+  font-family: var(--type-mono);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  letter-spacing: 0.05em;
+}
+.sectionhead__count span { color: var(--vermillion); }
+
+/* ============================================================
+   Stat strip (used once, not as the whole hero)
+   ============================================================ */
+.stats {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--stack-lg);
+}
+@media (min-width: 700px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+.stat {
+  display: grid;
+  gap: var(--stack-xs);
+  padding-top: var(--stack-md);
+  border-top: 1px solid var(--rule-strong);
+}
+.stat__num {
+  font-family: var(--type-display);
+  font-weight: 400;
+  font-size: clamp(2.4rem, 1.2rem + 3vw, 4rem);
+  line-height: 1;
+  color: var(--ink);
+  letter-spacing: -0.025em;
+}
+.stat__num span { color: var(--vermillion); }
+.stat__num .unit {
+  font-size: 0.6em; color: var(--ink-3); font-style: italic; font-weight: 300;
+  margin-left: 0.1em;
+}
+.stat__label { font-size: 0.95rem; color: var(--ink-2); max-width: 30ch; }
+
+/* ============================================================
+   Document mock (the centerpiece)
+   ============================================================ */
+.doc {
+  background: oklch(0.99 0.005 75);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  box-shadow: var(--shadow-doc);
+  font-family: var(--type-mono);
+  font-size: 0.72rem;
+  color: var(--ink);
+  overflow: hidden;
+  position: relative;
+}
+.doc__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-deep);
+  font-family: var(--type-body);
+  font-size: 0.72rem;
+  color: var(--ink-2);
+}
+.doc__head strong { color: var(--ink); font-weight: 600; }
+.doc__head em {
+  font-style: normal; color: var(--ink-3); font-family: var(--type-mono);
+  font-size: 0.66rem; letter-spacing: 0.04em;
+}
+.doc table { width: 100%; border-collapse: collapse; }
+.doc th, .doc td {
+  text-align: left;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
+  font-weight: 400;
+  vertical-align: top;
+}
+.doc th {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: oklch(0.98 0.008 75);
+  border-bottom: 1px solid var(--rule-strong);
+}
+.doc td.empty {
+  color: var(--ink-4);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in oklch, var(--rule) 50%, transparent) 6px 7px);
+}
+.doc td.filled-by-system {
+  color: var(--ink);
+  background: var(--vermillion-tint);
+  font-weight: 500;
+  position: relative;
+}
+.doc td.filled-by-system::after {
+  content: "•";
+  color: var(--vermillion);
+  font-size: 1.2em;
+  position: absolute;
+  top: 0.1em; right: 0.4em;
+  line-height: 1;
+}
+.doc td.preserved {
+  color: var(--ink-2);
+  background: color-mix(in oklch, var(--signal-green-tint) 60%, transparent);
+}
+.doc--blank tbody td:not(:first-child) { color: var(--ink-4); }
+.doc__caption {
+  padding: 0.55rem 0.85rem;
+  background: var(--paper-deep);
+  border-top: 1px solid var(--rule);
+  font-family: var(--type-body);
+  font-size: 0.78rem;
+  color: var(--ink-2);
+  display: flex; justify-content: space-between; gap: 1rem;
+}
+.doc__caption .badge { color: var(--vermillion); font-family: var(--type-mono); font-size: 0.7rem; letter-spacing: 0.04em; }
+.doc__caption .badge--green { color: var(--signal-green); }
+
+/* Three-up document arrangement */
+.docflow {
+  display: grid;
+  gap: var(--stack-lg);
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+@media (min-width: 1080px) {
+  .docflow {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+}
+.docflow__plus {
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--type-display);
+  font-size: clamp(2rem, 4vw, 3rem);
+  color: var(--vermillion);
+  font-weight: 300;
+}
+.docflow__plus::before, .docflow__plus::after {
+  content: ""; display: block; height: 1px; background: var(--rule-strong); flex: 1; min-width: 2rem;
+}
+@media (min-width: 1080px) {
+  .docflow__plus { flex-direction: column; align-self: center; }
+  .docflow__plus::before, .docflow__plus::after { width: 1px; height: 60px; flex: none; }
+}
+
+.docflow__result {
+  margin-top: var(--stack-xl);
+  position: relative;
+}
+.docflow__result::before {
+  content: "yields";
+  position: absolute; top: -2.2rem; left: 50%; transform: translateX(-50%);
+  font-family: var(--type-display); font-style: italic; font-weight: 300;
+  font-size: 1.1rem; color: var(--ink-3);
+  background: var(--paper); padding: 0 1rem;
+}
+.docflow__result::after {
+  content: ""; position: absolute; top: -1.4rem; left: 0; right: 0;
+  height: 1px; background: var(--rule-strong); z-index: -1;
+}
+
+/* ============================================================
+   Architecture diagram (SVG-driven)
+   ============================================================ */
+.pipeline {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--stack-md);
+}
+@media (min-width: 900px) {
+  .pipeline { grid-template-columns: repeat(5, 1fr); gap: 0; }
+}
+.pipe-step {
+  position: relative;
+  padding: var(--stack-md) var(--stack-md) var(--stack-lg);
+  border-top: 2px solid var(--ink);
+}
+.pipe-step + .pipe-step { border-left: none; }
+@media (min-width: 900px) {
+  .pipe-step { border-top: 2px solid var(--ink); padding-right: var(--stack-lg); }
+  .pipe-step + .pipe-step { border-left: 1px dashed var(--rule-strong); padding-left: var(--stack-md); }
+}
+.pipe-step__num {
+  font-family: var(--type-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--vermillion);
+  display: block;
+  margin-bottom: var(--stack-sm);
+}
+.pipe-step__title {
+  font-family: var(--type-body);
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin-bottom: var(--stack-xs);
+  color: var(--ink);
+}
+.pipe-step__desc { font-size: 0.92rem; color: var(--ink-2); line-height: 1.5; }
+.pipe-step__tag {
+  display: inline-block;
+  font-family: var(--type-mono);
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  margin-top: var(--stack-sm);
+  border: 1px solid var(--rule-strong);
+  padding: 0.15rem 0.45rem;
+  border-radius: 2px;
+}
+
+/* ============================================================
+   Validator transcript (the bug story)
+   ============================================================ */
+.transcript {
+  background: oklch(0.18 0.04 250);
+  border-radius: 6px;
+  padding: clamp(1.5rem, 2.5vw, 2.25rem);
+  color: oklch(0.92 0.02 75);
+  font-family: var(--type-mono);
+  font-size: 0.92rem;
+  line-height: 1.65;
+  box-shadow: var(--shadow-doc);
+}
+.transcript__hdr {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: var(--stack-md);
+  padding-bottom: var(--stack-sm);
+  border-bottom: 1px solid oklch(0.3 0.04 250);
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  color: oklch(0.7 0.03 250);
+}
+.transcript__hdr span:last-child { color: var(--vermillion); }
+.transcript__line { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; margin-bottom: 0.4rem; align-items: baseline; }
+.transcript__time { color: oklch(0.55 0.03 250); font-size: 0.78rem; }
+.transcript__msg { color: oklch(0.92 0.02 75); white-space: pre-wrap; word-break: break-word; }
+.transcript__msg.error { color: var(--vermillion); }
+.transcript__msg.error::before { content: "⚠ "; }
+.transcript__msg.fix { color: oklch(0.78 0.13 145); }
+.transcript__msg.fix::before { content: "✓ "; }
+.transcript__msg.info { color: oklch(0.78 0.04 250); }
+.transcript__msg em { color: oklch(0.95 0.02 75); font-style: normal; background: oklch(0.28 0.06 250); padding: 0.05em 0.4em; border-radius: 2px; }
+.transcript__msg strong { color: oklch(0.97 0.02 75); font-weight: 500; }
+
+.before-after {
+  display: grid; gap: var(--stack-md);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 800px) { .before-after { grid-template-columns: 1fr 1fr; } }
+.ba {
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  padding: var(--stack-md);
+  border-radius: 3px;
+}
+.ba__label {
+  font-family: var(--type-mono); font-size: 0.72rem; letter-spacing: 0.05em;
+  color: var(--ink-3); margin-bottom: var(--stack-sm);
+}
+.ba__label .x { color: var(--vermillion); }
+.ba__label .ok { color: var(--signal-green); }
+.ba__value {
+  font-family: var(--type-display);
+  font-size: clamp(2rem, 1rem + 3vw, 3rem);
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.ba__value.strike { color: var(--vermillion); text-decoration: line-through; text-decoration-thickness: 2px; text-decoration-color: var(--vermillion-deep); }
+.ba__value.ok { color: var(--signal-green); }
+.ba__why { font-size: 0.92rem; color: var(--ink-2); margin-top: var(--stack-sm); }
+
+/* ============================================================
+   Wizard mock (verify-then-cache)
+   ============================================================ */
+.wizard {
+  display: grid; gap: var(--stack-lg);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 1000px) { .wizard { grid-template-columns: repeat(3, 1fr); } }
+
+.wiz-step {
+  background: oklch(0.99 0.005 75);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  box-shadow: var(--shadow-soft);
+  padding: var(--stack-md);
+  display: grid;
+  gap: var(--stack-sm);
+}
+.wiz-step__step {
+  font-family: var(--type-mono); font-size: 0.72rem; color: var(--vermillion); letter-spacing: 0.05em;
+}
+.wiz-step__title { font-family: var(--type-body); font-weight: 600; font-size: 1.05rem; color: var(--ink); }
+.wiz-step__body { font-size: 0.92rem; color: var(--ink-2); line-height: 1.5; }
+.wiz-step__pane {
+  margin-top: var(--stack-sm);
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.6rem 0.75rem;
+  font-family: var(--type-mono);
+  font-size: 0.76rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.wiz-step__pane strong { color: var(--ink); font-weight: 500; }
+.wiz-step__pane .ok { color: var(--signal-green); }
+.wiz-step__pane .warn { color: var(--vermillion); }
+.wiz-step__btn {
+  display: inline-block;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.35rem 0.65rem;
+  border-radius: 2px;
+  font-family: var(--type-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  margin-top: var(--stack-xs);
+}
+.wiz-step__btn.accent { background: var(--vermillion); }
+
+/* ============================================================
+   Spec sheet (Section 7)
+   ============================================================ */
+.spec {
+  display: grid; grid-template-columns: 1fr; gap: 0;
+}
+.spec__row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--stack-xs);
+  padding: var(--stack-md) 0;
+  border-top: 1px solid var(--rule);
+}
+@media (min-width: 800px) {
+  .spec__row {
+    grid-template-columns: 14rem 1fr auto;
+    align-items: baseline;
+    gap: var(--stack-lg);
+  }
+}
+.spec__row:last-child { border-bottom: 1px solid var(--rule); }
+.spec__label {
+  font-family: var(--type-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+.spec__value { color: var(--ink); font-size: 1rem; line-height: 1.5; }
+.spec__value strong { font-weight: 600; }
+.spec__value code { font-family: var(--type-mono); font-size: 0.9em; color: var(--vermillion-deep); background: var(--vermillion-tint); padding: 0.05em 0.35em; border-radius: 2px; }
+.spec__tag {
+  font-family: var(--type-mono);
+  font-size: 0.72rem;
+  color: var(--signal-green);
+  letter-spacing: 0.04em;
+  border: 1px solid color-mix(in oklch, var(--signal-green) 35%, transparent);
+  padding: 0.15rem 0.45rem;
+  border-radius: 2px;
+  align-self: start;
+  white-space: nowrap;
+}
+.spec__tag.warn { color: var(--vermillion); border-color: color-mix(in oklch, var(--vermillion) 35%, transparent); }
+.spec__tag.info { color: var(--ink-2); border-color: var(--rule-strong); }
+
+/* ============================================================
+   Roadmap (Section 8)
+   ============================================================ */
+.roadmap {
+  display: grid; grid-template-columns: 1fr; gap: 0;
+}
+.road-step {
+  display: grid;
+  grid-template-columns: 4rem 1fr;
+  gap: var(--stack-md);
+  padding: var(--stack-md) 0;
+  border-top: 1px solid var(--rule);
+  align-items: baseline;
+}
+.road-step:last-child { border-bottom: 1px solid var(--rule); }
+.road-step__num {
+  font-family: var(--type-display);
+  font-size: clamp(1.8rem, 1rem + 1.6vw, 2.6rem);
+  font-weight: 400;
+  color: var(--vermillion);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.road-step__body { display: grid; gap: var(--stack-xs); }
+.road-step__title { font-family: var(--type-body); font-weight: 600; font-size: 1.1rem; color: var(--ink); }
+.road-step__when {
+  font-family: var(--type-mono); font-size: 0.72rem; color: var(--ink-3); letter-spacing: 0.04em;
+  margin-left: 0.5rem;
+}
+.road-step__desc { font-size: 0.95rem; color: var(--ink-2); max-width: 64ch; }
+
+/* ============================================================
+   Footer / sign-off
+   ============================================================ */
+.signoff {
+  padding-block: var(--section-y) clamp(3rem, 8vh, 5rem);
+  background: var(--paper-tint);
+  border-top: 1px solid var(--rule-strong);
+}
+.signoff__grid {
+  display: grid; gap: var(--stack-lg);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 800px) { .signoff__grid { grid-template-columns: 2fr 1fr; align-items: end; } }
+.signoff h2 {
+  font-size: clamp(2rem, 1rem + 2.4vw, 3.4rem);
+  font-weight: 400;
+  font-style: italic;
+  font-family: var(--type-display);
+  color: var(--ink);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.signoff__meta {
+  display: grid; gap: var(--stack-sm);
+  font-family: var(--type-mono); font-size: 0.78rem; color: var(--ink-3);
+}
+.signoff__meta strong { color: var(--ink); font-weight: 500; }
+
+/* ============================================================
+   Reveal on scroll
+   ============================================================ */
+@media (prefers-reduced-motion: no-preference) {
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1), transform 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
+  .reveal.is-in { opacity: 1; transform: none; }
+}
+
+/* ============================================================
+   Print
+   ============================================================ */
+@media print {
+  .topnav, .cover__scroll { display: none; }
+  body { background: white; }
+  .section { page-break-inside: avoid; padding-block: 2rem; }
+  .cover { min-height: auto; }
+}
+</style>
+</head>
+<body>
+
+<nav class="topnav" aria-label="Section nav">
+  <a class="topnav__brand" href="#cover">
+    <span class="topnav__brand-mark" aria-hidden="true"></span>
+    <span>Rehydrate Pipeline</span>
+  </a>
+  <div class="topnav__sections" role="list">
+    <a href="#problem">Problem</a>
+    <a href="#transform">Transform</a>
+    <a href="#pipeline">How it works</a>
+    <a href="#validator">Validator</a>
+    <a href="#wizard">Verify &amp; cache</a>
+    <a href="#production">Production</a>
+    <a href="#roadmap">Roadmap</a>
+  </div>
+  <div class="topnav__meta">Microsoft × RXO</div>
+</nav>
+
+<main class="page">
+
+  <!-- ============================================================
+       1. Cover
+       ============================================================ -->
+  <section id="cover" class="section cover">
+    <div class="cover__meta">
+      <div class="cover__chapter">
+        <span>00</span> &nbsp;/&nbsp; Customer briefing &nbsp;/&nbsp; Rehydrate pipeline
+      </div>
+      <div class="cover__date">
+        Prepared for RXO &nbsp;·&nbsp; May 2026
+      </div>
+    </div>
+
+    <div class="cover__title">
+      <h1 class="h1">
+        Filling the right cell <br />
+        with the <span class="accent">right number,</span> <br />
+        every time.
+      </h1>
+      <p class="cover__intent">
+        The rehydrate pipeline takes a priced <strong>RXO LaneExport</strong>
+        and a blank <strong>customer bid template</strong> and produces a
+        finished, audit&#8209;ready submission. It is built so analysts approve a
+        mapping <em>once</em> per template, and every run after that completes
+        in seconds without an LLM in the loop.
+      </p>
+    </div>
+
+    <dl class="cover__foot">
+      <div>
+        <dt>Audience</dt>
+        <dd>Procurement &amp; Operations <span>+ IT / Engineering</span></dd>
+      </div>
+      <div>
+        <dt>Status</dt>
+        <dd>Demo&#8209;ready <span>· in&#8209;tenant Foundry agent</span></dd>
+      </div>
+      <div>
+        <dt>Today's agenda</dt>
+        <dd>Walk the pipeline <span>· live demo · next steps</span></dd>
+      </div>
+    </dl>
+
+    <div class="cover__scroll">scroll</div>
+  </section>
+
+  <!-- ============================================================
+       2. The problem
+       ============================================================ -->
+  <section id="problem" class="section">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>01</span> &nbsp;/&nbsp; the problem we're solving</div>
+      <h2 class="h2">Pricing a customer bid is mostly mechanical data&#8209;entry,<br /> and one wrong cell can cost a contract.</h2>
+    </div>
+
+    <div class="grid grid-5-7">
+      <div class="reveal">
+        <p>
+          A pricing analyst opens a blank bid template the customer has sent
+          over. They open a priced lane export from RXO's own systems. Then
+          they spend hours copying values across, one row at a time, while
+          watching for a half&#8209;dozen ways the two files don't quite line
+          up.
+        </p>
+        <p style="margin-top:1rem;">
+          The mechanics are tedious. The judgment that <em>does</em> matter
+          (which export column belongs in which template cell, when to keep
+          fuel separate, when to leave a lane out) gets crowded out by the
+          act of typing. And the cost of a single mis&#8209;mapped column
+          shows up on every row of every lane.
+        </p>
+      </div>
+
+      <div class="reveal">
+        <article class="doc doc--blank" aria-label="A representative blank bid template">
+          <header class="doc__head">
+            <strong>Customer File · FTL | Road</strong>
+            <em>blank · awaiting pricing</em>
+          </header>
+          <table>
+            <thead>
+              <tr>
+                <th>Lane</th>
+                <th>Equipment</th>
+                <th style="text-align:right;">Freight Price</th>
+                <th style="text-align:right;">Fuel Surcharge</th>
+                <th style="text-align:right;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Atlanta &rarr; Dallas</td><td>53' Dry Van</td><td class="empty"></td><td class="empty"></td><td class="empty"></td></tr>
+              <tr><td>Chicago &rarr; Memphis</td><td>53' Dry Van</td><td class="empty"></td><td class="empty"></td><td class="empty"></td></tr>
+              <tr><td>Denver &rarr; Phoenix</td><td>53' Reefer</td><td class="empty"></td><td class="empty"></td><td class="empty"></td></tr>
+              <tr><td>Seattle &rarr; Boise</td><td>53' Dry Van</td><td class="empty"></td><td class="empty"></td><td class="empty"></td></tr>
+              <tr><td>Newark &rarr; Charlotte</td><td>53' Dry Van</td><td class="empty"></td><td class="empty"></td><td class="empty"></td></tr>
+            </tbody>
+          </table>
+          <div class="doc__caption">
+            <span>Original Customer File 1.xlsx &nbsp;· 3 sheets, 27 lanes</span>
+            <span class="badge">→ awaiting rehydrate</span>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <hr class="rule-thin" style="margin-block: var(--stack-2xl);" />
+
+    <div class="stats reveal">
+      <div class="stat">
+        <div class="stat__num">~4&ndash;6<span class="unit">hours</span></div>
+        <div class="stat__label">Analyst time on a typical multi&#8209;sheet bid, today.</div>
+      </div>
+      <div class="stat">
+        <div class="stat__num"><span>1</span> <span class="unit">column</span></div>
+        <div class="stat__label">The all&#8209;in&#8209;rate vs linehaul&#8209;rate mix&#8209;up that costs you fuel margin on every lane.</div>
+      </div>
+      <div class="stat">
+        <div class="stat__num">0<span class="unit">audit&nbsp;trail</span></div>
+        <div class="stat__label">Manual copy&#8209;paste leaves no record of why each cell got its value.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       3. What the system does (the transformation, shown literally)
+       ============================================================ -->
+  <section id="transform" class="section section--paper-deep">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>02</span> &nbsp;/&nbsp; what the system does</div>
+      <h2 class="h2">It takes the two files an analyst is already working from,<br /> and gives back the finished one.</h2>
+    </div>
+
+    <div class="docflow reveal">
+      <article class="doc" aria-label="Input 1, blank customer template">
+        <header class="doc__head"><strong>1 · Customer template</strong><em>.xlsx</em></header>
+        <table>
+          <thead><tr><th>Lane</th><th>Equipment</th><th style="text-align:right;">Freight Price</th></tr></thead>
+          <tbody>
+            <tr><td>Atlanta &rarr; Dallas</td><td>53'&nbsp;DV</td><td class="empty"></td></tr>
+            <tr><td>Chicago &rarr; Memphis</td><td>53'&nbsp;DV</td><td class="empty"></td></tr>
+            <tr><td>Denver &rarr; Phoenix</td><td>53'&nbsp;RF</td><td class="empty"></td></tr>
+          </tbody>
+        </table>
+        <div class="doc__caption"><span>Writable cells only · customer notes preserved</span></div>
+      </article>
+
+      <div class="docflow__plus" aria-hidden="true">+</div>
+
+      <article class="doc" aria-label="Input 2, priced RXO lane export">
+        <header class="doc__head"><strong>2 · RXO LaneExport</strong><em>.xlsx</em></header>
+        <table>
+          <thead><tr><th>Origin Note</th><th style="text-align:right;">Linehaul</th><th style="text-align:right;">All&#8209;In</th><th style="text-align:right;">Fuel</th></tr></thead>
+          <tbody>
+            <tr><td>ATL &rarr; DAL · 53'&nbsp;DV</td><td style="text-align:right;">2,658.97</td><td style="text-align:right;">3,155.24</td><td style="text-align:right;">496.27</td></tr>
+            <tr><td>CHI &rarr; MEM · 53'&nbsp;DV</td><td style="text-align:right;">1,424.42</td><td style="text-align:right;">1,720.00</td><td style="text-align:right;">295.58</td></tr>
+            <tr><td>DEN &rarr; PHX · 53'&nbsp;RF</td><td style="text-align:right;">1,530.42</td><td style="text-align:right;">1,815.75</td><td style="text-align:right;">285.33</td></tr>
+          </tbody>
+        </table>
+        <div class="doc__caption"><span>Multiple plausible price columns; only one is correct</span></div>
+      </article>
+    </div>
+
+    <div class="docflow__result reveal">
+      <article class="doc" aria-label="Output, filled-in submission">
+        <header class="doc__head">
+          <strong>Submission.xlsx</strong>
+          <em>written by rehydrate · template diff: passed</em>
+        </header>
+        <table>
+          <thead>
+            <tr>
+              <th>Lane</th><th>Equipment</th>
+              <th style="text-align:right;">Freight Price</th>
+              <th style="text-align:right;">Fuel Surcharge</th>
+              <th style="text-align:right;">Total Shipment Rate</th>
+              <th>Currency</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Atlanta &rarr; Dallas</td><td>53'&nbsp;DV</td>
+              <td class="filled-by-system" style="text-align:right;">2,658.97</td>
+              <td class="filled-by-system" style="text-align:right;">496.27</td>
+              <td class="preserved" style="text-align:right;">3,155.24</td>
+              <td class="filled-by-system">USD</td>
+            </tr>
+            <tr>
+              <td>Chicago &rarr; Memphis</td><td>53'&nbsp;DV</td>
+              <td class="filled-by-system" style="text-align:right;">1,424.42</td>
+              <td class="filled-by-system" style="text-align:right;">295.58</td>
+              <td class="preserved" style="text-align:right;">1,720.00</td>
+              <td class="filled-by-system">USD</td>
+            </tr>
+            <tr>
+              <td>Denver &rarr; Phoenix</td><td>53'&nbsp;RF</td>
+              <td class="filled-by-system" style="text-align:right;">1,530.42</td>
+              <td class="filled-by-system" style="text-align:right;">285.33</td>
+              <td class="preserved" style="text-align:right;">1,815.75</td>
+              <td class="filled-by-system">USD</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="doc__caption">
+          <span>
+            <span class="badge">● filled by rehydrate</span>
+            &nbsp;&nbsp;
+            <span class="badge badge--green">▢ preserved customer formula</span>
+          </span>
+          <span>cells written: 18 &nbsp;· skipped: 0 &nbsp;· diff violations: 0</span>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       4. How it works (the architecture)
+       ============================================================ -->
+  <section id="pipeline" class="section">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>03</span> &nbsp;/&nbsp; how it works</div>
+      <h2 class="h2">Five stages, in order. Two of them never call an LLM.</h2>
+      <p class="lead reveal">
+        The pipeline isolates the only place that benefits from an LLM (matching
+        column names across files) and surrounds it with deterministic code
+        on both sides. The match is checked against freight semantics before
+        anything is written, and the approved mapping is cached so it is never
+        proposed twice.
+      </p>
+    </div>
+
+    <div class="pipeline reveal">
+      <div class="pipe-step">
+        <span class="pipe-step__num">01 · profile</span>
+        <div class="pipe-step__title">Read the template</div>
+        <p class="pipe-step__desc">
+          Locate every bid&#8209;sheet, find the header row, and enumerate which
+          columns are writable vs locked. Fingerprint the template structure
+          for the cache.
+        </p>
+        <span class="pipe-step__tag">deterministic</span>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-step__num">02 · plan</span>
+        <div class="pipe-step__title">Propose the mapping</div>
+        <p class="pipe-step__desc">
+          The Foundry agent proposes which export field belongs in which
+          template column. It does this once. Cache&#8209;hit on a known
+          template skips this step entirely.
+        </p>
+        <span class="pipe-step__tag">Foundry · gpt&#8209;5.4</span>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-step__num">03 · validate</span>
+        <div class="pipe-step__title">Apply freight semantics</div>
+        <p class="pipe-step__desc">
+          A deterministic post&#8209;check demotes known anti&#8209;patterns
+          (all&#8209;in&nbsp;→&nbsp;linehaul, categorical&nbsp;→&nbsp;numeric)
+          to needs&#8209;review before they can auto&#8209;write.
+        </p>
+        <span class="pipe-step__tag">deterministic</span>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-step__num">04 · verify</span>
+        <div class="pipe-step__title">Human approves once</div>
+        <p class="pipe-step__desc">
+          The analyst confirms the mapping in the wizard. Their approval
+          is saved under the template's fingerprint and re&#8209;used the
+          next time the same template arrives.
+        </p>
+        <span class="pipe-step__tag">human · cached</span>
+      </div>
+      <div class="pipe-step">
+        <span class="pipe-step__num">05 · write</span>
+        <div class="pipe-step__title">Resolve &amp; write</div>
+        <p class="pipe-step__desc">
+          For each lane in the export, write into the matching template
+          row, refusing to overwrite filled cells. Produce a per&#8209;cell
+          write report and a template diff proving only writable cells
+          changed.
+        </p>
+        <span class="pipe-step__tag">deterministic · auditable</span>
+      </div>
+    </div>
+
+    <div class="grid grid-half reveal" style="margin-top: var(--stack-2xl);">
+      <div>
+        <h3 class="h3">Why the LLM lives only in step 2</h3>
+        <p style="margin-top: var(--stack-sm);">
+          Mapping <em>"Customer Linehaul Rate"</em> to <em>"Freight Price"</em>
+          is a language task; arithmetic and file I/O are not. We let the
+          model do the part it is best at, and keep code in charge of the
+          parts where a wrong answer is worse than no answer.
+        </p>
+      </div>
+      <div>
+        <h3 class="h3">Why the cache matters</h3>
+        <p style="margin-top: var(--stack-sm);">
+          A customer template doesn't change between bid cycles. Once an
+          analyst has approved <em>"this column comes from that field"</em>,
+          there is no reason to ask the model again. The same cache also
+          prevents subtle prompt&#8209;drift from changing the answer
+          run&#8209;over&#8209;run.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       5. The validator
+       ============================================================ -->
+  <section id="validator" class="section section--paper-deep">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>04</span> &nbsp;/&nbsp; the validator</div>
+      <h2 class="h2">When the model is wrong, the validator catches it<br /> before the file is ever written.</h2>
+      <p class="lead reveal">
+        The all&#8209;in&#8209;rate vs linehaul&#8209;rate confusion is the
+        single most expensive mistake the pipeline could make. So it is the
+        first thing the validator looks for, on every run, every mapping,
+        every template, without asking the LLM.
+      </p>
+    </div>
+
+    <div class="grid grid-half reveal">
+      <div>
+        <h3 class="h3" style="margin-bottom: var(--stack-md);">A real run, against your file</h3>
+        <p style="margin-bottom: var(--stack-md);">
+          The Foundry agent's first instinct on
+          <span class="mono">FTL&nbsp;LaneExport.xlsx</span> was to map
+          <span class="mono">RXO&nbsp;All&nbsp;In&nbsp;Customer&nbsp;Rate</span>
+          into the template's <span class="mono">Freight&nbsp;Price</span>
+          column. That looks right; both numbers are dollars. But the
+          template's <span class="mono">Total&nbsp;Shipment&nbsp;Rate</span>
+          is a formula that adds <span class="mono">Fuel&nbsp;Surcharge</span>
+          on top, so writing the all&#8209;in there double&#8209;counts
+          fuel on every lane.
+        </p>
+        <p>
+          The validator carries that rule deterministically. It demotes the
+          mapping to <span class="mono">confidence&nbsp;0.40</span>, marks
+          it <span class="mono">needs_review</span>, and the writer refuses
+          to auto&#8209;write it, even if the operator approves
+          everything else.
+        </p>
+      </div>
+
+      <aside class="transcript" aria-label="Validator log from a real run">
+        <div class="transcript__hdr">
+          <span>validator log · run 20260526222033</span>
+          <span>4 rules · 1 demoted</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:18</span>
+          <span class="transcript__msg info">planner proposed <em>RXO All In Customer Rate &rarr; Freight Price</em> @ 0.95</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:18</span>
+          <span class="transcript__msg error"><strong>rule:</strong> all_in_to_linehaul matched</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:18</span>
+          <span class="transcript__msg error">all&#8209;in rate &rarr; linehaul column would double&#8209;count fuel via the template's Total formula</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:18</span>
+          <span class="transcript__msg info">confidence demoted: 0.95 &rarr; <em>0.40</em> · needs_review = true</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:19</span>
+          <span class="transcript__msg fix">operator approved <em>Customer Linehaul Rate &rarr; Freight Price</em> via wizard</span>
+        </div>
+        <div class="transcript__line">
+          <span class="transcript__time">11:20:19</span>
+          <span class="transcript__msg fix">writer: 18 cells written · 0 violations · diff passed</span>
+        </div>
+      </aside>
+    </div>
+
+    <hr class="rule-thin" style="margin-block: var(--stack-2xl);" />
+
+    <div class="reveal">
+      <h3 class="h3" style="margin-bottom: var(--stack-md);">The number the customer actually expects</h3>
+      <div class="before-after">
+        <div class="ba">
+          <div class="ba__label"><span class="x">✕ if we'd trusted the LLM</span></div>
+          <div class="ba__value strike">$1,720.00</div>
+          <p class="ba__why">RXO All In Customer Rate, written into Freight Price.
+          The template's Total formula then adds fuel a <em>second</em> time:
+          $1,720.00 + $295.58 = $2,015.58. Wrong, by $295.58 on a single lane.</p>
+        </div>
+        <div class="ba">
+          <div class="ba__label"><span class="ok">✓ what rehydrate writes</span></div>
+          <div class="ba__value ok">$1,424.42</div>
+          <p class="ba__why">Customer Linehaul Rate, written into Freight Price.
+          Template's Total formula adds fuel once: $1,424.42 + $295.58 = $1,720.00,
+          exactly the all&#8209;in number on the source row.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top: var(--stack-2xl);">
+      <h3 class="h3" style="margin-bottom: var(--stack-md);">The four rules the validator enforces today</h3>
+      <div class="spec">
+        <div class="spec__row">
+          <div class="spec__label">all_in_to_linehaul</div>
+          <div class="spec__value">An all&#8209;in / total / door&#8209;to&#8209;door rate cannot fill a linehaul / freight&#8209;price column. The template's Total formula would add fuel again. <strong>Demotes to 0.40.</strong></div>
+          <div class="spec__tag warn">money safety</div>
+        </div>
+        <div class="spec__row">
+          <div class="spec__label">categorical_to_numeric</div>
+          <div class="spec__value">A categorical source (Equipment Type, Fuel Type, Currency, Mode, UoM) cannot fill a numeric Rate / Cost / Charge / Fee column. <strong>Demotes to 0.40.</strong></div>
+          <div class="spec__tag warn">type safety</div>
+        </div>
+        <div class="spec__row">
+          <div class="spec__label">numeric_to_categorical</div>
+          <div class="spec__value">A numeric dollar source cannot fill a categorical column. <strong>Demotes to 0.40.</strong></div>
+          <div class="spec__tag warn">type safety</div>
+        </div>
+        <div class="spec__row">
+          <div class="spec__label">identity_boost</div>
+          <div class="spec__value">When source and target column names are identical (e.g. Currency&nbsp;&rarr;&nbsp;Currency), boost to 0.95 so it passes the auto&#8209;write gate without ceremony.</div>
+          <div class="spec__tag">throughput</div>
+        </div>
+      </div>
+      <p class="lead" style="margin-top: var(--stack-lg); font-size: 1rem;">
+        Adding a fifth rule is a code change, reviewed and tested. It is not
+        prompt&#8209;tuning. Anything the validator <em>cannot</em> decide
+        falls through to the wizard, where the analyst makes the call.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       6. Verify-then-cache (the wizard)
+       ============================================================ -->
+  <section id="wizard" class="section">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>05</span> &nbsp;/&nbsp; verify &amp; cache</div>
+      <h2 class="h2">Approve a template once. Every run after that is instant.</h2>
+      <p class="lead reveal">
+        The Streamlit wizard is the only place a human sees the mapping.
+        After approval, the plan is stored under the template's fingerprint
+        and re&#8209;used on every subsequent run, including across
+        bid cycles, even months apart, as long as the template structure
+        hasn't changed.
+      </p>
+    </div>
+
+    <div class="wizard reveal">
+      <div class="wiz-step">
+        <span class="wiz-step__step">step 01</span>
+        <div class="wiz-step__title">Plan mapping</div>
+        <div class="wiz-step__body">
+          Profile the template, load the export, check the cache for this
+          template's fingerprint. Cache hit returns the previously approved
+          plan in milliseconds; cache miss calls the agent.
+        </div>
+        <div class="wiz-step__pane">
+          <strong>cache lookup</strong> · fp <span style="color:var(--vermillion-deep);">2f108fd0cb02bd8d</span><br/>
+          <span class="ok">✓ approved 2026&#8209;05&#8209;26 22:20 UTC by mbush</span>
+        </div>
+        <span class="wiz-step__btn">Step 1 · Plan Mapping</span>
+      </div>
+
+      <div class="wiz-step">
+        <span class="wiz-step__step">step 02</span>
+        <div class="wiz-step__title">Review the mapping</div>
+        <div class="wiz-step__body">
+          One row per (sheet, slot, target column). Source field is a
+          dropdown of every column in the export. The validator runs live
+          on each edit and surfaces warnings inline.
+        </div>
+        <div class="wiz-step__pane">
+          Freight Price ← <strong>Customer Linehaul Rate</strong> &nbsp;<span class="ok">no warning</span><br/>
+          Equipment Type ← <strong>Equipment Type Detail</strong><br/>
+          Currency ← <strong>Currency</strong> &nbsp;<span class="ok">identity match</span>
+        </div>
+        <span class="wiz-step__btn">⚠ live validator feedback</span>
+      </div>
+
+      <div class="wiz-step">
+        <span class="wiz-step__step">step 03</span>
+        <div class="wiz-step__title">Approve &amp; generate</div>
+        <div class="wiz-step__body">
+          Writes the submission, runs the template diff, saves the
+          approved plan to the cache. The next time this template arrives,
+          the wizard opens straight to a cache&#8209;hit banner.
+        </div>
+        <div class="wiz-step__pane">
+          submission.xlsx · 18 cells written<br/>
+          template_diff.json · <span class="ok">0 violations</span><br/>
+          mapping_cache/2f108fd0cb02bd8d.json · <span class="ok">saved</span>
+        </div>
+        <span class="wiz-step__btn accent">Approve &amp; Generate Submission</span>
+      </div>
+    </div>
+
+    <div class="grid grid-half reveal" style="margin-top: var(--stack-2xl);">
+      <div>
+        <h3 class="h3">First run for a new template</h3>
+        <p style="margin-top: var(--stack-sm); color:var(--ink-2);">
+          ~15&ndash;60 seconds, including the Foundry call. Analyst reviews
+          and approves. The approval is the high&#8209;leverage decision
+          for that template's entire life.
+        </p>
+      </div>
+      <div>
+        <h3 class="h3">Every run after that</h3>
+        <p style="margin-top: var(--stack-sm); color:var(--ink-2);">
+          Sub&#8209;second to plan, &lt;&nbsp;5&nbsp;seconds end&#8209;to&#8209;end
+          for typical bid sizes. No LLM call. No prompt drift. Re&#8209;train
+          is one click away if the template changes.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       7. Production-ready
+       ============================================================ -->
+  <section id="production" class="section section--paper-deep">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>06</span> &nbsp;/&nbsp; production&#8209;ready</div>
+      <h2 class="h2">The things IT will ask about, answered up front.</h2>
+    </div>
+
+    <div class="spec reveal">
+      <div class="spec__row">
+        <div class="spec__label">Identity</div>
+        <div class="spec__value">Foundry agent runs in your tenant. Authentication via Microsoft Entra ID, no shared API keys checked into source. Tenant ID is pinned at process start so a stale corporate token can't be used by mistake.</div>
+        <div class="spec__tag">in&#8209;tenant</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Data path</div>
+        <div class="spec__value">Customer files never leave the run host in demo mode. In the Function&#8209;App deployment, files traverse blob containers you own (<code>%EXPORT_CONTAINER%</code>, <code>%TEMPLATE_CONTAINER%</code>, <code>%OUTBOX_CONTAINER%</code>) and are processed by your Function instance.</div>
+        <div class="spec__tag">your storage</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Preservation</div>
+        <div class="spec__value">Three&#8209;layer guard refuses to overwrite a cell that already has a value. Pre&#8209;filled customer inputs, descriptors, notes, and formulas are reported in <code>write_report.json</code> as <code>skipped_preserved</code> instead of being clobbered.</div>
+        <div class="spec__tag">read&#8209;only safe</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Audit trail</div>
+        <div class="spec__value">Every run emits <code>template_profile.json</code>, <code>mapping_plan.json</code>, <code>write_report.json</code>, <code>pending_review.json</code>, and <code>template_diff.json</code>. The diff <em>proves</em> only writable cells changed. Every cell carries the source field that produced it.</div>
+        <div class="spec__tag">replayable</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Confidence gates</div>
+        <div class="spec__value">
+          <code>REHYDRATE_CONFIDENCE_THRESHOLD</code> (default 0.70) sends low&#8209;confidence mappings to the wizard; <code>REHYDRATE_MIN_WRITE_CONFIDENCE</code> (default 0.85) gates auto&#8209;write. Validator&#8209;demoted mappings (0.40) cannot pass either.
+        </div>
+        <div class="spec__tag info">configurable</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Cache invalidation</div>
+        <div class="spec__value">A cached plan is keyed by the template's structural fingerprint. Re&#8209;arrange the sheets or change the writable&#8209;column set and the fingerprint changes, the cache misses, the wizard re&#8209;trains. The analyst can also force a re&#8209;train with one click.</div>
+        <div class="spec__tag">deterministic</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Verified</div>
+        <div class="spec__value"><strong>137 unit tests</strong> covering the planner, validator, cache, resolver, writer, and runner. CI gates on test failure and on lint. The validator rules themselves carry 25 tests for the four anti&#8209;patterns and the normalisation rules.</div>
+        <div class="spec__tag">CI green</div>
+      </div>
+      <div class="spec__row">
+        <div class="spec__label">Deployment</div>
+        <div class="spec__value">Same code, two runtimes. <strong>Streamlit</strong> for analyst&#8209;in&#8209;the&#8209;loop work today. <strong>Function App</strong> with an HTTP endpoint and an Event&#8209;Grid blob trigger when you're ready to wire it into upstream automation. No code change between them.</div>
+        <div class="spec__tag info">portable</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       8. Roadmap / next steps
+       ============================================================ -->
+  <section id="roadmap" class="section">
+    <div class="sectionhead">
+      <div class="sectionhead__count"><span>07</span> &nbsp;/&nbsp; what's next</div>
+      <h2 class="h2">From this demo to production for RXO,<br />in four moves.</h2>
+    </div>
+
+    <div class="roadmap reveal">
+      <div class="road-step">
+        <div class="road-step__num">01</div>
+        <div class="road-step__body">
+          <div class="road-step__title">
+            Pilot on three real customer templates
+            <span class="road-step__when">~2&nbsp;weeks</span>
+          </div>
+          <p class="road-step__desc">
+            Pick three live customers whose bid cycles you'd like to take
+            off an analyst's plate. We profile each template, plan the
+            mapping, your analyst approves once, and we measure the
+            time&#8209;to&#8209;submission for the next cycle against
+            today's manual baseline.
+          </p>
+        </div>
+      </div>
+
+      <div class="road-step">
+        <div class="road-step__num">02</div>
+        <div class="road-step__body">
+          <div class="road-step__title">
+            Wire into your file&#8209;ingest path
+            <span class="road-step__when">~3&nbsp;weeks</span>
+          </div>
+          <p class="road-step__desc">
+            Swap Streamlit's local file picker for the Function&#8209;App
+            blob trigger. Customer templates land in
+            <code style="font-family:var(--type-mono); font-size:0.9em;">%TEMPLATE_CONTAINER%</code>;
+            exports land in
+            <code style="font-family:var(--type-mono); font-size:0.9em;">%EXPORT_CONTAINER%</code>;
+            finished submissions appear in your outbox. Analyst still
+            holds the approval on first&#8209;sight templates.
+          </p>
+        </div>
+      </div>
+
+      <div class="road-step">
+        <div class="road-step__num">03</div>
+        <div class="road-step__body">
+          <div class="road-step__title">
+            Shared, governed mapping cache
+            <span class="road-step__when">~2&nbsp;weeks</span>
+          </div>
+          <p class="road-step__desc">
+            Move the cache from local disk to your blob storage so an
+            analyst&rsquo;s approval is available to the whole pricing
+            team. Add approval review: who approved it, when,
+            and a one&#8209;click rollback to the previous version of
+            the mapping.
+          </p>
+        </div>
+      </div>
+
+      <div class="road-step">
+        <div class="road-step__num">04</div>
+        <div class="road-step__body">
+          <div class="road-step__title">
+            New validator rules from real exceptions
+            <span class="road-step__when">ongoing</span>
+          </div>
+          <p class="road-step__desc">
+            Every mapping an analyst rejects in the wizard becomes a
+            candidate rule. We codify the recurring ones into the
+            validator, so the next analyst (or the model)
+            never sees that mistake again. The system gets smarter
+            without prompt&#8209;tuning.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============================================================
+     Sign-off
+     ============================================================ -->
+<footer class="signoff">
+  <div class="page">
+    <div class="signoff__grid reveal">
+      <h2>
+        Built for RXO,<br /> ready when you are.
+      </h2>
+      <div class="signoff__meta">
+        <div>
+          <strong>Demo &amp; pilot</strong><br />
+          Max Bush · Microsoft<br />
+          maxbush@microsoft.com
+        </div>
+        <div>
+          <strong>Source &amp; status</strong><br />
+          freight&#8209;bid&#8209;schema&#8209;normalizer<br />
+          feature/rxo&#8209;reverse&#8209;pipeline
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Reveal-on-scroll. Subtle, no scroll-jacking, respects reduced-motion.
+  (function () {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('is-in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add('is-in');
+          io.unobserve(e.target);
+        }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
+    document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+  })();
+</script>
+
+</body>
+</html>

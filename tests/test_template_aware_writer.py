@@ -15,6 +15,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from openpyxl import load_workbook
 
@@ -26,6 +27,7 @@ from src.function_app.models.contracts import (
 from src.function_app.services.template_aware_writer import (
     ProtectedCellError,
     TemplateAwareWriter,
+    _is_empty_cell,
     resolve_instructions,
 )
 from src.function_app.services.template_profiler import TemplateProfiler
@@ -273,6 +275,439 @@ class TestResolveInstructions(unittest.TestCase):
 
         self.assertEqual(instructions, [])
         self.assertEqual(no_bid, [])
+
+
+class TestIsEmptyCell(unittest.TestCase):
+    """Empty-cell predicate edge cases."""
+
+    def test_none_and_blank_strings_are_empty(self) -> None:
+        self.assertTrue(_is_empty_cell(None))
+        self.assertTrue(_is_empty_cell(""))
+        self.assertTrue(_is_empty_cell("   "))
+        self.assertTrue(_is_empty_cell("\t\n"))
+
+    def test_zero_and_false_are_NOT_empty(self) -> None:
+        """``0``, ``0.0``, and ``False`` are real customer values — never treat
+        them as empty even though they are falsy in Python."""
+        self.assertFalse(_is_empty_cell(0))
+        self.assertFalse(_is_empty_cell(0.0))
+        self.assertFalse(_is_empty_cell(False))
+
+    def test_non_empty_strings_and_numbers_are_NOT_empty(self) -> None:
+        self.assertFalse(_is_empty_cell("Carson"))
+        self.assertFalse(_is_empty_cell(1234.56))
+        self.assertFalse(_is_empty_cell("0"))  # the string "0" is still a value
+
+
+class TestWriterPreservationGuard(unittest.TestCase):
+    """Writer defense-in-depth: refuse to overwrite a non-empty cell."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.template_path = build_template_workbook(
+            self.tmp / "template.xlsx",
+            prefill_descriptors=True,
+            prefill_bid_inputs=True,
+        )
+        self.profile = TemplateProfiler().profile(str(self.template_path))
+        self.slot0 = next(s for s in self.profile.bid_sheets[0].bid_slots if s.slot_index == 0)
+        self.writer = TemplateAwareWriter()
+
+    def test_writer_skips_when_cell_already_populated(self) -> None:
+        currency_col = _writable_col_index(self.slot0, "Currency")
+        instr = CellWriteInstruction(
+            sheet_name=BID_SHEET_NAME,
+            row_index=FIRST_DATA_ROW,
+            col_index=currency_col,
+            value="USD",  # the fixture pre-filled this cell with "EUR"
+            source_route_name=ROUTE_NAMES[0],
+            source_field="Currency",
+        )
+
+        report = self.writer.write(
+            template_path=str(self.template_path),
+            instructions=[instr],
+            output_path=str(self.tmp / "submission.xlsx"),
+            template_profile=self.profile,
+        )
+
+        self.assertEqual(report.cells_written, 0)
+        self.assertEqual(report.cells_skipped, 1)
+        self.assertEqual(report.cells_skipped_preserved, 1)
+        self.assertEqual(report.write_log[0]["action"], "skipped_preserved")
+        self.assertEqual(report.write_log[0]["existing_value"], "EUR")
+        self.assertEqual(report.write_log[0]["attempted_value"], "USD")
+        # The saved workbook must still carry the original value
+        from openpyxl import load_workbook as _lw
+        wb = _lw(str(self.tmp / "submission.xlsx"))
+        try:
+            self.assertEqual(
+                wb[BID_SHEET_NAME].cell(row=FIRST_DATA_ROW, column=currency_col).value,
+                "EUR",
+            )
+        finally:
+            wb.close()
+
+    def test_writer_zero_and_false_are_preserved_not_overwritten(self) -> None:
+        """``0`` and ``False`` are real values — the guard must respect them."""
+        currency_col = _writable_col_index(self.slot0, "Currency")
+        # Plant a 0 value into the target cell
+        from openpyxl import load_workbook as _lw
+        wb = _lw(str(self.template_path))
+        wb[BID_SHEET_NAME].cell(row=FIRST_DATA_ROW, column=currency_col).value = 0
+        wb.save(str(self.template_path))
+        wb.close()
+
+        instr = CellWriteInstruction(
+            sheet_name=BID_SHEET_NAME,
+            row_index=FIRST_DATA_ROW,
+            col_index=currency_col,
+            value="USD",
+            source_route_name=ROUTE_NAMES[0],
+            source_field="Currency",
+        )
+
+        report = self.writer.write(
+            template_path=str(self.template_path),
+            instructions=[instr],
+            output_path=str(self.tmp / "submission.xlsx"),
+            template_profile=self.profile,
+        )
+        self.assertEqual(report.cells_skipped_preserved, 1)
+
+
+class TestResolverPreservation(unittest.TestCase):
+    """Resolver pre-filter: skip writes for non-empty cells when template_path is provided."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.template_path = build_template_workbook(
+            self.tmp / "template.xlsx",
+            prefill_descriptors=True,
+            prefill_bid_inputs=True,
+        )
+        self.profile = TemplateProfiler().profile(str(self.template_path))
+
+    def _plan(self) -> ReverseMappingPlan:
+        return ReverseMappingPlan(
+            plan_id="test-plan",
+            template_fingerprint=self.profile.template_fingerprint,
+            planner_mode="mock",
+            mappings=[
+                FieldMapping(
+                    source_field="Currency",
+                    target_column="Currency",
+                    bid_slot=0,
+                    confidence_score=0.99,
+                ),
+                FieldMapping(
+                    source_field="RXO All In Customer Rate",
+                    target_column="Freight \nPrice",
+                    bid_slot=0,
+                    confidence_score=0.99,
+                ),
+            ],
+            assumptions=[],
+        )
+
+    def test_pre_filled_descriptor_cell_is_skipped_by_resolver(self) -> None:
+        export_rows = [
+            {"Origin Note": rn, "Currency": "USD", "RXO All In Customer Rate": 1500.0}
+            for rn in ROUTE_NAMES
+        ]
+
+        result = resolve_instructions(
+            export_rows,
+            self.profile,
+            self._plan(),
+            template_path=str(self.template_path),
+            auto_write_threshold=0.85,
+        )
+
+        # 3 routes × Currency (pre-filled "EUR") → all skipped
+        # 3 routes × Freight Price (empty) → all written
+        self.assertEqual(len(result.instructions), 3)
+        self.assertTrue(all(i.source_field == "RXO All In Customer Rate" for i in result.instructions))
+        self.assertEqual(result.cells_skipped_preserved, 3)
+        self.assertEqual(result.no_bid_lanes, [])
+        # Skip log must record the existing/attempted values for auditability
+        preserved_entries = [e for e in result.skip_log if e["action"] == "skipped_preserved"]
+        self.assertEqual(len(preserved_entries), 3)
+        for entry in preserved_entries:
+            self.assertEqual(entry["existing_value"], "EUR")
+            self.assertEqual(entry["attempted_value"], "USD")
+
+    def test_without_template_path_resolver_behaves_as_before(self) -> None:
+        """When template_path is None, the resolver does not open the workbook
+        and cannot preserve — old behaviour preserved for backward compat."""
+        export_rows = [
+            {"Origin Note": rn, "Currency": "USD", "RXO All In Customer Rate": 1500.0}
+            for rn in ROUTE_NAMES
+        ]
+
+        result = resolve_instructions(export_rows, self.profile, self._plan())
+
+        # 2 mappings × 3 routes = 6 instructions (no preservation)
+        self.assertEqual(len(result.instructions), 6)
+        self.assertEqual(result.cells_skipped_preserved, 0)
+
+
+class TestResolverConfidenceGating(unittest.TestCase):
+    """Mappings with confidence < auto_write_threshold are skipped unless human-approved."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.template_path = build_template_workbook(self.tmp / "template.xlsx")
+        self.profile = TemplateProfiler().profile(str(self.template_path))
+
+    def _export(self) -> list[dict[str, Any]]:
+        return [
+            {"Origin Note": rn, "Currency": "USD", "RXO All In Customer Rate": 1500.0}
+            for rn in ROUTE_NAMES
+        ]
+
+    def test_low_confidence_mapping_is_skipped_when_above_threshold(self) -> None:
+        plan = ReverseMappingPlan(
+            plan_id="test-plan",
+            template_fingerprint=self.profile.template_fingerprint,
+            planner_mode="live",
+            mappings=[
+                FieldMapping(
+                    source_field="Currency",
+                    target_column="Currency",
+                    bid_slot=0,
+                    confidence_score=0.99,  # eligible
+                ),
+                FieldMapping(
+                    source_field="RXO All In Customer Rate",
+                    target_column="Freight \nPrice",
+                    bid_slot=0,
+                    confidence_score=0.65,  # below threshold
+                    needs_review=True,
+                ),
+            ],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            self._export(),
+            self.profile,
+            plan,
+            template_path=str(self.template_path),
+            auto_write_threshold=0.85,
+        )
+
+        # Only the Currency mapping should produce instructions
+        self.assertEqual(len(result.instructions), 3)
+        self.assertTrue(all(i.source_field == "Currency" for i in result.instructions))
+        self.assertEqual(result.cells_skipped_low_confidence, 1)
+        low_conf_entries = [e for e in result.skip_log if e["action"] == "skipped_low_confidence"]
+        self.assertEqual(len(low_conf_entries), 1)
+        self.assertEqual(low_conf_entries[0]["source_field"], "RXO All In Customer Rate")
+
+    def test_human_approved_low_confidence_mapping_is_written(self) -> None:
+        """A reviewer accepted/overrode the mapping → needs_review=False → eligible
+        even though the confidence stayed below the auto-write threshold."""
+        plan = ReverseMappingPlan(
+            plan_id="test-plan",
+            template_fingerprint=self.profile.template_fingerprint,
+            planner_mode="live",
+            mappings=[
+                FieldMapping(
+                    source_field="RXO All In Customer Rate",
+                    target_column="Freight \nPrice",
+                    bid_slot=0,
+                    confidence_score=0.50,  # well below threshold
+                    needs_review=False,     # human approved
+                ),
+            ],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            self._export(),
+            self.profile,
+            plan,
+            template_path=str(self.template_path),
+            auto_write_threshold=0.85,
+        )
+
+        # All 3 routes should produce instructions because the mapping was approved
+        self.assertEqual(len(result.instructions), 3)
+        self.assertEqual(result.cells_skipped_low_confidence, 0)
+
+
+class TestResolverDescriptorValidation(unittest.TestCase):
+    """Per-row descriptor cross-validation skips rows where template ≠ export."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+
+    def _profile(self, template_path: str) -> Any:
+        return TemplateProfiler().profile(template_path)
+
+    def test_matching_descriptors_pass_through(self) -> None:
+        template = str(build_template_workbook(
+            self.tmp / "template.xlsx", prefill_descriptors=True,
+        ))
+        profile = self._profile(template)
+        export_rows = [
+            {
+                "Origin Note": rn,
+                "Origin City": "OriginCity",  # matches template default
+                "Origin State": "ST",
+                "Currency": "USD",
+                "RXO All In Customer Rate": 1500.0,
+            }
+            for rn in ROUTE_NAMES
+        ]
+        plan = ReverseMappingPlan(
+            plan_id="t", template_fingerprint=profile.template_fingerprint,
+            planner_mode="mock",
+            mappings=[FieldMapping(
+                source_field="RXO All In Customer Rate",
+                target_column="Freight \nPrice",
+                bid_slot=0, confidence_score=0.99,
+            )],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            export_rows, profile, plan,
+            template_path=template,
+            auto_write_threshold=0.85,
+            validate_descriptors=True,
+        )
+
+        self.assertEqual(len(result.instructions), 3)
+        self.assertEqual(result.rows_skipped_descriptor_mismatch, 0)
+
+    def test_mismatching_descriptors_skip_entire_row(self) -> None:
+        # The first route's template Origin City is overridden to "WRONG"
+        template = str(build_template_workbook(
+            self.tmp / "template.xlsx",
+            prefill_descriptors=True,
+            descriptor_overrides={ROUTE_NAMES[0]: {5: "WrongCity"}},
+        ))
+        profile = self._profile(template)
+        export_rows = [
+            {
+                "Origin Note": rn,
+                "Origin City": "OriginCity",  # disagrees with WrongCity for route 0
+                "Origin State": "ST",
+                "Currency": "USD",
+                "RXO All In Customer Rate": 1500.0,
+            }
+            for rn in ROUTE_NAMES
+        ]
+        plan = ReverseMappingPlan(
+            plan_id="t", template_fingerprint=profile.template_fingerprint,
+            planner_mode="mock",
+            mappings=[FieldMapping(
+                source_field="RXO All In Customer Rate",
+                target_column="Freight \nPrice",
+                bid_slot=0, confidence_score=0.99,
+            )],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            export_rows, profile, plan,
+            template_path=template,
+            auto_write_threshold=0.85,
+            validate_descriptors=True,
+        )
+
+        # First route is skipped; 2 remaining routes × 1 mapping = 2 instructions
+        self.assertEqual(len(result.instructions), 2)
+        self.assertEqual(result.rows_skipped_descriptor_mismatch, 1)
+        mismatch_entries = [e for e in result.skip_log if e["action"] == "skipped_descriptor_mismatch"]
+        self.assertEqual(len(mismatch_entries), 1)
+        self.assertEqual(mismatch_entries[0]["route"], ROUTE_NAMES[0])
+
+    def test_missing_export_descriptor_fields_dont_block_writes(self) -> None:
+        """If the export lacks descriptor fields, we cannot validate → skip the
+        check (do not penalise that row)."""
+        template = str(build_template_workbook(
+            self.tmp / "template.xlsx", prefill_descriptors=True,
+        ))
+        profile = self._profile(template)
+        # Export omits Origin City / Origin State entirely
+        export_rows = [
+            {"Origin Note": rn, "Currency": "USD", "RXO All In Customer Rate": 1500.0}
+            for rn in ROUTE_NAMES
+        ]
+        plan = ReverseMappingPlan(
+            plan_id="t", template_fingerprint=profile.template_fingerprint,
+            planner_mode="mock",
+            mappings=[FieldMapping(
+                source_field="RXO All In Customer Rate",
+                target_column="Freight \nPrice",
+                bid_slot=0, confidence_score=0.99,
+            )],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            export_rows, profile, plan,
+            template_path=template,
+            auto_write_threshold=0.85,
+            validate_descriptors=True,
+        )
+
+        self.assertEqual(len(result.instructions), 3)
+        self.assertEqual(result.rows_skipped_descriptor_mismatch, 0)
+
+
+class TestResolverDuplicateRouteDetection(unittest.TestCase):
+    """Ambiguous Origin Note values must be flagged and not written to."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.template_path = build_template_workbook(self.tmp / "template.xlsx")
+        self.profile = TemplateProfiler().profile(str(self.template_path))
+
+    def test_duplicate_origin_note_is_detected_and_skipped(self) -> None:
+        # Two export rows share ROUTE_NAMES[0]
+        export_rows = [
+            {"Origin Note": ROUTE_NAMES[0], "RXO All In Customer Rate": 1500.0, "Currency": "USD"},
+            {"Origin Note": ROUTE_NAMES[1], "RXO All In Customer Rate": 1600.0, "Currency": "USD"},
+            {"Origin Note": ROUTE_NAMES[2], "RXO All In Customer Rate": 1700.0, "Currency": "USD"},
+            {"Origin Note": ROUTE_NAMES[0], "RXO All In Customer Rate": 9999.0, "Currency": "USD"},  # dup
+        ]
+        plan = ReverseMappingPlan(
+            plan_id="t", template_fingerprint=self.profile.template_fingerprint,
+            planner_mode="mock",
+            mappings=[FieldMapping(
+                source_field="RXO All In Customer Rate",
+                target_column="Freight \nPrice",
+                bid_slot=0, confidence_score=0.99,
+            )],
+            assumptions=[],
+        )
+
+        result = resolve_instructions(
+            export_rows, self.profile, plan,
+            template_path=str(self.template_path),
+            auto_write_threshold=0.85,
+        )
+
+        # Routes 1 and 2 get written (2 instructions); route 0 is ambiguous → skipped
+        self.assertEqual(len(result.instructions), 2)
+        self.assertIn(ROUTE_NAMES[0], result.duplicate_export_routes)
+        dup_entries = [e for e in result.skip_log if e["action"] == "skipped_duplicate_route"]
+        self.assertEqual(len(dup_entries), 1)
+        self.assertEqual(dup_entries[0]["route"], ROUTE_NAMES[0])
 
 
 if __name__ == "__main__":

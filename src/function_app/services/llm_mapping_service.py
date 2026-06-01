@@ -38,16 +38,56 @@ You are a freight bid schema mapping expert.
 Your task is to match columns from a priced export file to writable columns in a
 customer bid template so that pricing can be written back into the template.
 
-Rules:
-- Base your mappings solely on column *names*. Do not assume or invent data values.
-- Every source column must map to at most one target column (or "UNMAPPED" if no
-  reasonable match exists).
-- Use standard freight terminology to guide ambiguous matches:
-    * Rate / All-In / Total → maps to price/rate target columns
-    * FSC / Fuel Surcharge → maps to fuel-related target columns
-    * Equipment / Mode → maps to equipment-type target columns
-    * Currency → maps to currency target columns
-- Return strictly valid JSON – no prose, no markdown fences.
+CORE PRINCIPLES
+- Base your mappings solely on column *names*. Do not invent or infer data values.
+- Every source column maps to at most one target column, or "UNMAPPED" if no safe
+  match exists. "UNMAPPED" is always a safe answer when you are uncertain.
+- Do NOT map to template columns whose header contains "(calc)" or which look
+  like derived totals — they are formula cells the template computes itself.
+
+FREIGHT RATE DOMAIN RULES (these prevent the most common bugs)
+
+Rule 1 — Linehaul vs All-In rates (critical):
+  Freight rates come in two flavours:
+    * "Linehaul" / "Base" / "Flat" rate = base price only, excludes fuel surcharge
+    * "All-In" / "Total" / "Door-to-Door" rate = includes fuel surcharge
+  A template column whose header reads "Freight Price", "Linehaul Rate",
+  "Base Rate", or "Flat Rate" expects LINEHAUL ONLY. If the template ALSO has
+  a separate "Fuel Surcharge" column (writable or calc), the freight column
+  MUST be linehaul; writing an all-in value there double-counts fuel.
+  A column called "Total Shipment Rate" or "All-In Rate" expects the all-in
+  value (but those are usually formula cells — leave them UNMAPPED).
+
+Rule 2 — Categorical vs Numeric columns:
+  A column header that ends in "Type", "Category", "Mode", "Currency", or
+  "Code" expects a short string label, NEVER a dollar amount. A column
+  containing "Rate", "Cost", "Charge", "Fee", "Price", "Amount", or "$"
+  expects a number, NEVER a categorical label.
+
+Rule 3 — Identity-first matching:
+  When a source field and target field share the same word (case-insensitive,
+  ignoring whitespace), prefer that mapping unless Rules 1 or 2 forbid it.
+  Examples: "Currency" -> "Currency"; "Customer Linehaul Rate" -> "Linehaul Rate".
+
+Rule 4 — Conservative when ambiguous:
+  If a source field could plausibly map to two different target columns, pick
+  the more specific one. If you cannot pick confidently, return "UNMAPPED" with
+  a low confidence score rather than guessing.
+
+GOOD EXAMPLES
+  "Customer Linehaul Rate"   -> "Freight Price"          (linehaul -> linehaul OK)
+  "Currency"                 -> "Currency"               (identity match OK)
+  "Origin Note"              -> "Route Name"             (route join key OK)
+
+BAD EXAMPLES -- DO NOT DO THESE
+  "RXO All In Customer Rate" -> "Freight Price"          (all-in -> linehaul BAD: double-counts fuel)
+  "Customer FSC %"           -> "Fuel Type"              (numeric -> categorical BAD)
+  "Customer FSC Type"        -> "Fuel Surcharge Amount"  (categorical -> numeric BAD)
+  "MX Cost"                  -> "ORC Charges"            (different accessorials BAD: unrelated)
+  any source                 -> "Total Shipment Rate"    (it's a calc formula BAD)
+
+OUTPUT
+Return strictly valid JSON -- no prose, no markdown fences.
 """
 
 _ROUND1_USER_TEMPLATE = """\
@@ -97,9 +137,11 @@ Focus ONLY on these low-confidence mappings (confidence < {threshold}):
 Export columns: {export_cols_json}
 Template columns: {template_cols_json}
 
-Apply freight domain knowledge: rate fields usually map to price columns,
-fuel surcharge maps to FSC columns, equipment type to mode/equipment columns.
-Revise each mapping target and confidence if you can improve the match.
+Re-apply the linehaul-vs-all-in rule, the categorical-vs-numeric rule, and the
+identity-first rule from the system prompt. When a source name and target name
+share a distinctive word (e.g. both contain "Linehaul" or both contain
+"Currency") prefer that mapping. Mark a mapping UNMAPPED if no safe match
+exists.
 
 Return JSON with ALL previously proposed mappings (revised + unchanged):
 {{
@@ -123,10 +165,12 @@ def _mock_map(export_cols: List[str], template_cols: List[str]) -> List[dict]:
     template_lower = {c.lower().replace("\\n", " ").replace("\n", " "): c for c in template_cols}
 
     KEYWORD_MAP = [
-        (["all in", "allin", "all-in", "customer rate"], ["freight", "price", "rate"]),
-        (["mx cost", "mxcost", "mexico cost"],           ["orc", "charges", "origin"]),
+        # Linehaul (base) rate → Freight Price (linehaul-only target).
+        # The "all-in" alternative is intentionally NOT mapped here: when a
+        # template has separate freight + fuel columns, writing an all-in
+        # value into Freight Price double-counts fuel via the Total formula.
+        (["linehaul", "base rate", "flat rate"],         ["freight", "linehaul", "base rate"]),
         (["equipment type detail", "equip type"],         ["equipment type"]),
-        (["customer fsc", "fsc type", "fuel type"],       ["fuel type"]),
         (["currency"],                                     ["currency"]),
     ]
 

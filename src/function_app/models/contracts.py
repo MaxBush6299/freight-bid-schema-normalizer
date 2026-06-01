@@ -225,3 +225,25 @@ class WriteReport(BaseModel):
     warnings: List[ReverseValidationIssue] = Field(default_factory=list)
     validation_summary: Optional[ReverseValidationReport] = None
     write_log: List[Dict[str, Any]]
+    # Preservation / gating counters (P2-004: prevent destructive overwrites)
+    cells_skipped_preserved: int = 0           # writer-side defense-in-depth catches
+    cells_skipped_low_confidence: int = 0      # resolver gated by auto_write_threshold
+    cells_skipped_preserved_resolver: int = 0  # resolver pre-filtered, never reached writer
+    rows_skipped_descriptor_mismatch: int = 0  # row skipped because template/export descriptors disagree
+    duplicate_export_routes: List[str] = Field(default_factory=list)  # ambiguous Origin Note keys
+
+
+class InstructionResolutionResult(BaseModel):
+    """Result of ``resolve_instructions``. Carries instructions plus skip metadata
+    so the runner can merge it into the final WriteReport."""
+    instructions: List[CellWriteInstruction]
+    no_bid_lanes: List[str]
+    cells_skipped_preserved: int = 0           # cell already had a non-empty value
+    cells_skipped_low_confidence: int = 0      # mapping confidence below auto_write_threshold
+    rows_skipped_descriptor_mismatch: int = 0
+    duplicate_export_routes: List[str] = Field(default_factory=list)
+    skip_log: List[Dict[str, Any]] = Field(default_factory=list)  # audit trail
+
+    def __iter__(self):  # backwards-compat: ``instructions, no_bid = result`` still works
+        yield self.instructions
+        yield self.no_bid_lanes

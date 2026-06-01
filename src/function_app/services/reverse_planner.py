@@ -21,8 +21,9 @@ import os
 import uuid
 from typing import Any
 
-from ..models.contracts import FieldMapping, ReverseMappingPlan, TemplateProfile
+from ..models.contracts import FieldMapping, HumanReviewRequest, ReverseMappingPlan, TemplateProfile
 from .foundry_agent_client import FoundryAgentClient
+from .freight_semantics_validator import validate_mappings
 from .llm_mapping_service import LLMMappingService
 
 # ---------------------------------------------------------------------------
@@ -35,52 +36,49 @@ from .llm_mapping_service import LLMMappingService
 # (whitespace/newlines stripped for comparison at write time).
 # ---------------------------------------------------------------------------
 _MOCK_MAPPINGS: list[dict[str, Any]] = [
-    # Primary rate — write the all-in rate to Freight Price (the template's main input cell).
-    # The template calculates Fuel Surcharge and Total Shipment Rate via its own formulas,
-    # so we do NOT write to those (they are formula-protected mirror cells).
+    # Primary rate — write the LINEHAUL rate to Freight Price.
+    # Freight Price is universally a linehaul-only cell when the template also
+    # has a separate Fuel Surcharge column (which RXO templates do). Writing
+    # an all-in value here would double-count fuel via the Total formula.
+    # The template calculates Fuel Surcharge and Total Shipment Rate via its
+    # own formulas, so we do NOT write to those (they are formula-protected).
     {
-        "source_field": "RXO All In Customer Rate",
+        "source_field": "Customer Linehaul Rate",
         "target_column": "Freight \nPrice",
         "bid_slot": 0,
         "value_transform": "round_2",
-        "note": "All-in customer rate → Freight Price (template's primary rate input)",
+        "note": "Linehaul rate → Freight Price (linehaul-only cell; fuel is calculated separately)",
     },
-    # Accessorial / cross-border
-    {
-        "source_field": "MX Cost",
-        "target_column": "ORC \nCharges",
-        "bid_slot": 0,
-        "value_transform": "round_2",
-        "note": "Mexico cost → ORC Charges (closest available template field)",
-    },
-    # Reference / classification fields
+    # Reference / classification fields with exact-match identity targets
     {
         "source_field": "Equipment Type Detail",
         "target_column": "Equipment Type",
         "bid_slot": 0,
         "value_transform": "none",
-    },
-    {
-        "source_field": "Customer FSC Type",
-        "target_column": "Fuel Type",
-        "bid_slot": 0,
-        "value_transform": "none",
+        "note": "Equipment Type Detail → Equipment Type (different vocabularies — flagged for review)",
     },
     {
         "source_field": "Currency",
         "target_column": "Currency",
         "bid_slot": 0,
         "value_transform": "none",
+        "note": "Currency → Currency (identity match)",
     },
 ]
 
 _MOCK_ASSUMPTIONS = [
     "Primary bid slot (slot 0) is targeted; alternative slots left blank.",
-    "RXO All In Customer Rate is written to Freight Price (the template's only writable rate field).",
+    "Freight Price receives Customer Linehaul Rate (LINEHAUL, not all-in). "
+    "The template computes Fuel Surcharge and Total Shipment Rate from this "
+    "value via its own formulas — writing an all-in value would double-count fuel.",
     "Fuel Surcharge and Total Shipment Rate are formula-protected mirror cells; they are NOT written.",
-    "The template auto-calculates Fuel Surcharge and Total Shipment Rate from its built-in formulas.",
-    "MX Cost is mapped to ORC Charges as the closest available writable template field.",
-    "Equipment Type Detail, Currency, and Fuel Type are written as-is (no transform).",
+    "MX Cost / Border Crossing Fee / ORC Charges are not assumed to map from this export — "
+    "those accessorial categories need explicit operator approval.",
+    "Customer FSC Type (BreakthroughFuel etc.) is categorical and is not mapped to Fuel Type "
+    "(which expects 'Diesel' / 'Gasoline'-style labels) without operator review.",
+    "Equipment Type Detail is written into Equipment Type as-is even though the vocabularies "
+    "may differ (V53DV vs T53DV); operator should confirm during mapping review.",
+    "Currency → Currency is an exact identity match and is written as-is.",
     "Route Name matching uses Origin Note field from export (exact string match).",
 ]
 
@@ -117,8 +115,30 @@ class ReversePlanner:
         export_columns: list[str] | None = None,
     ) -> ReverseMappingPlan:
         if self.mode == "mock":
-            return self._mock_plan(template_profile)
-        return self._live_plan(template_profile, export_columns or [])
+            plan = self._mock_plan(template_profile)
+        else:
+            plan = self._live_plan(template_profile, export_columns or [])
+        return self._apply_semantics_validator(plan)
+
+    # ── deterministic post-validator ─────────────────────────────────────────
+
+    @staticmethod
+    def _apply_semantics_validator(plan: ReverseMappingPlan) -> ReverseMappingPlan:
+        """Run the deterministic freight-semantics validator on the mappings.
+
+        The validator mutates ``plan.mappings`` in place: it demotes confidence
+        on anti-patterns (e.g. all-in source -> linehaul target) and boosts
+        identity matches. After it runs we rebuild ``pending_review`` from the
+        updated ``needs_review`` flags so the operator sees every demoted
+        mapping during the review step.
+        """
+        result = validate_mappings(plan.mappings)
+        if result.actions:
+            plan.assumptions = list(plan.assumptions) + [
+                f"[validator/{a.rule_id}] {a.message}" for a in result.actions
+            ]
+        plan.pending_review = _rebuild_pending_review(plan.mappings)
+        return plan
 
     # ── mock ──────────────────────────────────────────────────────────────────
 
@@ -190,3 +210,29 @@ class ReversePlanner:
             pending_review=pending_review,
             iterations_run=iterations_run,
         )
+
+
+def _rebuild_pending_review(mappings: list[FieldMapping]) -> list[HumanReviewRequest]:
+    """Re-derive ``pending_review`` from the current ``needs_review`` flags.
+
+    After the freight-semantics validator mutates mappings, the planner-supplied
+    pending_review list may be stale (validator may have demoted previously
+    high-confidence mappings). Rebuilding from scratch is cheap and ensures
+    every mapping needing operator approval appears exactly once.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[HumanReviewRequest] = []
+    for fm in mappings:
+        if not fm.needs_review:
+            continue
+        key = (fm.source_field, fm.target_column)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(HumanReviewRequest(
+            source_field=fm.source_field,
+            target_column=fm.target_column,
+            confidence_score=fm.confidence_score,
+            reasoning=fm.reasoning,
+        ))
+    return out

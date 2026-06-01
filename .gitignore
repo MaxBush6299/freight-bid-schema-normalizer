@@ -27,6 +27,10 @@ local.settings.json
 .azurite/
 artifacts/
 
+# Real customer data (kept locally only, never committed)
+examples/inputs/*.xlsx
+examples/outputs/*.xlsx
+
 # Environment files and local secrets
 .env
 .env.*
